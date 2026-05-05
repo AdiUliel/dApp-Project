@@ -1,0 +1,42 @@
+USER
+ │
+ ▼
+כותב פוסט ב-FRONTEND
+ │
+ ▼
+FRONTEND → IPFS
+ │         (שומר תוכן)
+ │
+ ▼
+מקבל CID
+ │
+ ▼
+FRONTEND → MetaMask
+ │
+ ▼
+MetaMask → BLOCKCHAIN
+ │         (createPost)
+ │
+ ▼
+Smart Contract
+ │
+ ├─ שומר metadata
+ └─ פולט EVENT
+ │
+ ▼
+The Graph מאזין
+ │
+ ▼
+שומר ב-GraphQL DB
+ │
+ ▼
+FRONTEND שואל GraphQL
+ │
+ ▼
+מקבל CID
+ │
+ ▼
+FRONTEND → IPFS
+ │
+ ▼
+מציג פוסט למשתמש
