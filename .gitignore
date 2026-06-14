@@ -1,1 +1,16 @@
-node_modules
+# dependencies
+node_modules/
+blockchain/node_modules/
+reddit-dapp-project/node_modules/
+
+# Hardhat generated
+blockchain/artifacts/
+blockchain/cache/
+blockchain/types/
+blockchain/ignition/deployments/
+
+# env
+.env
+
+# Vite
+reddit-dapp-project/dist/

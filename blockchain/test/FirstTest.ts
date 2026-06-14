@@ -6,10 +6,11 @@ describe("DecentralizedForum", function () {
   let owner: any;
   let user1: any;
   let user2: any;
+  let user3: any;
 
   before(async function () {
     ({ ethers } = await hre.network.connect());
-    [owner, user1, user2] = await ethers.getSigners();
+    [owner, user1, user2, user3] = await ethers.getSigners();
   });
 
   async function deployForum() {
@@ -19,34 +20,29 @@ describe("DecentralizedForum", function () {
   }
 
   describe("createCommunity", function () {
-    it("should create a community successfully", async function () {
+    it("should create a community, make creator a member, and make creator moderator", async function () {
       const forum = await deployForum();
 
       await forum.createCommunity("Solidity", "cid-123");
 
-      const count = await forum.getCommunityCount();
-      expect(count).to.equal(1n);
+      expect(await forum.getCommunityCount()).to.equal(1n);
+      expect(await forum.userCommunityCount(owner.address)).to.equal(1n);
 
       const ids = await forum.getAllCommunityIds();
       expect(ids.length).to.equal(1);
       expect(ids[0]).to.equal(1n);
 
       const community = await forum.getCommunity(1n);
-      expect(community[0]).to.equal(1n); // id
-      expect(community[1]).to.equal("Solidity"); // name
-      expect(community[2]).to.equal(owner.address); // creator
-      expect(community[3]).to.equal("cid-123"); // metadataCID
-      expect(community[5]).to.equal(1n); // membersCount
-      expect(community[6]).to.equal(true); // exists
-    });
+      expect(community[0]).to.equal(1n);
+      expect(community[1]).to.equal("Solidity");
+      expect(community[2]).to.equal(owner.address);
+      expect(community[3]).to.equal("cid-123");
+      expect(community[5]).to.equal(1n);
+      expect(community[6]).to.equal(true);
 
-    it("should automatically make the creator a member", async function () {
-      const forum = await deployForum();
-
-      await forum.createCommunity("Solidity", "cid-123");
-
-      const isMember = await forum.isUserMemberOfCommunity(1n, owner.address);
-      expect(isMember).to.equal(true);
+      expect(await forum.isUserMemberOfCommunity(1n, owner.address)).to.equal(true);
+      expect(await forum.isUserModeratorOfCommunity(1n, owner.address)).to.equal(true);
+      expect(await forum.getUserJoinedAt(1n, owner.address)).to.be.greaterThan(0n);
     });
 
     it("should not allow empty community name", async function () {
@@ -74,20 +70,34 @@ describe("DecentralizedForum", function () {
         forum.createCommunity("Solidity", "cid-456")
       ).to.be.revertedWithCustomError(forum, "CommunityNameAlreadyExists");
     });
+
+    it("should allow only creator to update community metadata", async function () {
+      const forum = await deployForum();
+
+      await forum.createCommunity("Solidity", "cid-123");
+      await forum.updateCommunityMetadata(1n, "cid-456");
+
+      const community = await forum.getCommunity(1n);
+      expect(community[3]).to.equal("cid-456");
+
+      await expect(
+        forum.connect(user1).updateCommunityMetadata(1n, "cid-789")
+      ).to.be.revertedWithCustomError(forum, "OnlyCommunityCreatorAllowed");
+    });
   });
 
-  describe("joinCommunity", function () {
+  describe("joinCommunity and leaveCommunity", function () {
     it("should allow another user to join a community", async function () {
       const forum = await deployForum();
 
       await forum.createCommunity("Solidity", "cid-123");
       await forum.connect(user1).joinCommunity(1n);
 
-      const isMember = await forum.isUserMemberOfCommunity(1n, user1.address);
-      expect(isMember).to.equal(true);
+      expect(await forum.isUserMemberOfCommunity(1n, user1.address)).to.equal(true);
+      expect(await forum.getUserJoinedAt(1n, user1.address)).to.be.greaterThan(0n);
 
       const community = await forum.getCommunity(1n);
-      expect(community[5]).to.equal(2n); // membersCount
+      expect(community[5]).to.equal(2n);
     });
 
     it("should not allow a user to join twice", async function () {
@@ -108,6 +118,76 @@ describe("DecentralizedForum", function () {
         forum.connect(user1).joinCommunity(999n)
       ).to.be.revertedWithCustomError(forum, "CommunityDoesNotExist");
     });
+
+    it("should allow a regular member to leave but not the creator", async function () {
+      const forum = await deployForum();
+
+      await forum.createCommunity("Solidity", "cid-123");
+      await forum.connect(user1).joinCommunity(1n);
+      await forum.connect(user1).leaveCommunity(1n);
+
+      expect(await forum.isUserMemberOfCommunity(1n, user1.address)).to.equal(false);
+      expect(await forum.getUserJoinedAt(1n, user1.address)).to.equal(0n);
+
+      await expect(
+        forum.leaveCommunity(1n)
+      ).to.be.revertedWithCustomError(forum, "CannotRemoveCreatorModerator");
+    });
+  });
+
+  describe("moderators and bans", function () {
+    it("should allow creator to add and remove a moderator", async function () {
+      const forum = await deployForum();
+
+      await forum.createCommunity("Solidity", "cid-123");
+      await forum.connect(user1).joinCommunity(1n);
+
+      await forum.addModerator(1n, user1.address);
+      expect(await forum.isUserModeratorOfCommunity(1n, user1.address)).to.equal(true);
+
+      await forum.removeModerator(1n, user1.address);
+      expect(await forum.isUserModeratorOfCommunity(1n, user1.address)).to.equal(false);
+    });
+
+    it("should not allow non-creator to add a moderator", async function () {
+      const forum = await deployForum();
+
+      await forum.createCommunity("Solidity", "cid-123");
+      await forum.connect(user1).joinCommunity(1n);
+
+      await expect(
+        forum.connect(user1).addModerator(1n, user1.address)
+      ).to.be.revertedWithCustomError(forum, "OnlyCommunityCreatorAllowed");
+    });
+
+    it("should allow moderator to ban and unban users", async function () {
+      const forum = await deployForum();
+
+      await forum.createCommunity("Solidity", "cid-123");
+      await forum.connect(user1).joinCommunity(1n);
+
+      await forum.banUser(1n, user1.address);
+
+      expect(await forum.isUserBannedFromCommunity(1n, user1.address)).to.equal(true);
+      expect(await forum.isUserMemberOfCommunity(1n, user1.address)).to.equal(false);
+
+      await expect(
+        forum.connect(user1).joinCommunity(1n)
+      ).to.be.revertedWithCustomError(forum, "UserBannedFromCommunity");
+
+      await forum.unbanUser(1n, user1.address);
+      expect(await forum.isUserBannedFromCommunity(1n, user1.address)).to.equal(false);
+    });
+
+    it("should not allow banning the community creator", async function () {
+      const forum = await deployForum();
+
+      await forum.createCommunity("Solidity", "cid-123");
+
+      await expect(
+        forum.banUser(1n, owner.address)
+      ).to.be.revertedWithCustomError(forum, "CannotBanCommunityCreator");
+    });
   });
 
   describe("createPost", function () {
@@ -119,19 +199,20 @@ describe("DecentralizedForum", function () {
 
       await forum.connect(user1).createPost(1n, "post-cid-1");
 
-      const postCount = await forum.getPostCount();
-      expect(postCount).to.equal(1n);
+      expect(await forum.getPostCount()).to.equal(1n);
+      expect(await forum.userPostCount(user1.address)).to.equal(1n);
 
       const postIds = await forum.getPostsByCommunity(1n);
       expect(postIds.length).to.equal(1);
       expect(postIds[0]).to.equal(1n);
 
       const post = await forum.getPost(1n);
-      expect(post[0]).to.equal(1n); // id
-      expect(post[1]).to.equal(1n); // communityId
-      expect(post[2]).to.equal(user1.address); // author
-      expect(post[3]).to.equal("post-cid-1"); // contentCID
-      expect(post[5]).to.equal(true); // exists
+      expect(post[0]).to.equal(1n);
+      expect(post[1]).to.equal(1n);
+      expect(post[2]).to.equal(user1.address);
+      expect(post[3]).to.equal("post-cid-1");
+      expect(post[5]).to.equal(true);
+      expect(post[6]).to.equal(false);
     });
 
     it("should not allow a non-member to create a post", async function () {
@@ -161,63 +242,99 @@ describe("DecentralizedForum", function () {
         forum.createPost(1n, "")
       ).to.be.revertedWithCustomError(forum, "EmptyContentCID");
     });
+
+    it("should allow batch post creation", async function () {
+      const forum = await deployForum();
+
+      await forum.createCommunity("Solidity", "cid-123");
+      await forum.batchCreatePosts(1n, ["post-cid-1", "post-cid-2", "post-cid-3"]);
+
+      expect(await forum.getPostCount()).to.equal(3n);
+      expect(await forum.userPostCount(owner.address)).to.equal(3n);
+
+      const postIds = await forum.getPostsByCommunity(1n);
+      expect(postIds.map((id: bigint) => id)).to.deep.equal([1n, 2n, 3n]);
+    });
+
+    it("should not allow empty batch", async function () {
+      const forum = await deployForum();
+
+      await forum.createCommunity("Solidity", "cid-123");
+
+      await expect(
+        forum.batchCreatePosts(1n, [])
+      ).to.be.revertedWithCustomError(forum, "EmptyPostBatch");
+    });
   });
 
-  describe("createComment", function () {
-    it("should allow a member to comment on a post", async function () {
+  describe("post moderation", function () {
+    it("should allow a moderator to hide and restore a post", async function () {
+      const forum = await deployForum();
+
+      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createPost(1n, "post-cid-1");
+
+      await forum.hidePost(1n);
+      expect(await forum.isPostHidden(1n)).to.equal(true);
+
+      const hiddenPost = await forum.getPost(1n);
+      expect(hiddenPost[6]).to.equal(true);
+
+      await forum.restorePost(1n);
+      expect(await forum.isPostHidden(1n)).to.equal(false);
+    });
+
+    it("should not allow a non-moderator to hide a post", async function () {
       const forum = await deployForum();
 
       await forum.createCommunity("Solidity", "cid-123");
       await forum.connect(user1).joinCommunity(1n);
-      await forum.connect(user2).joinCommunity(1n);
+      await forum.createPost(1n, "post-cid-1");
 
-      await forum.connect(user1).createPost(1n, "post-cid-1");
-      await forum.connect(user2).createComment(1n, "comment-cid-1");
+      await expect(
+        forum.connect(user1).hidePost(1n)
+      ).to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
+    });
+  });
 
-      const commentCount = await forum.getCommentCount();
-      expect(commentCount).to.equal(1n);
+  describe("off-chain comments checkpoint", function () {
+    it("should not store comments on-chain and should allow moderator to update comments Merkle root", async function () {
+      const forum = await deployForum();
 
-      const commentIds = await forum.getCommentsByPost(1n);
-      expect(commentIds.length).to.equal(1);
-      expect(commentIds[0]).to.equal(1n);
+      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createPost(1n, "post-cid-1");
 
-      const comment = await forum.getComment(1n);
-      expect(comment[0]).to.equal(1n); // id
-      expect(comment[1]).to.equal(1n); // postId
-      expect(comment[2]).to.equal(user2.address); // author
-      expect(comment[3]).to.equal("comment-cid-1"); // contentCID
-      expect(comment[5]).to.equal(true); // exists
+      const root = ethers.keccak256(ethers.toUtf8Bytes("comments batch 1"));
+      await forum.updateCommentsMerkleRoot(1n, root);
+
+      const data = await forum.getCommentsMerkleRoot(1n);
+      expect(data[0]).to.equal(root);
+      expect(data[1]).to.be.greaterThan(0n);
     });
 
-    it("should not allow a non-member to comment", async function () {
+    it("should not allow a non-moderator to update comments Merkle root", async function () {
       const forum = await deployForum();
 
       await forum.createCommunity("Solidity", "cid-123");
       await forum.connect(user1).joinCommunity(1n);
-      await forum.connect(user1).createPost(1n, "post-cid-1");
+      await forum.createPost(1n, "post-cid-1");
+
+      const root = ethers.keccak256(ethers.toUtf8Bytes("comments batch 1"));
 
       await expect(
-        forum.connect(user2).createComment(1n, "comment-cid-1")
-      ).to.be.revertedWithCustomError(forum, "OnlyCommunityMembersAllowed");
+        forum.connect(user1).updateCommentsMerkleRoot(1n, root)
+      ).to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
     });
 
-    it("should not allow commenting on a non-existing post", async function () {
-      const forum = await deployForum();
-
-      await expect(
-        forum.createComment(999n, "comment-cid-1")
-      ).to.be.revertedWithCustomError(forum, "PostDoesNotExist");
-    });
-
-    it("should not allow empty comment CID", async function () {
+    it("should not allow an empty comments Merkle root", async function () {
       const forum = await deployForum();
 
       await forum.createCommunity("Solidity", "cid-123");
       await forum.createPost(1n, "post-cid-1");
 
       await expect(
-        forum.createComment(1n, "")
-      ).to.be.revertedWithCustomError(forum, "EmptyContentCID");
+        forum.updateCommentsMerkleRoot(1n, ethers.ZeroHash)
+      ).to.be.revertedWithCustomError(forum, "EmptyCommentsMerkleRoot");
     });
   });
 
@@ -247,11 +364,10 @@ describe("DecentralizedForum", function () {
       await forum.createCommunity("Solidity", "cid-123");
       await forum.connect(user1).joinCommunity(1n);
       await forum.createPost(1n, "post-cid-1");
-      await forum.connect(user1).createComment(1n, "comment-cid-1");
+      await forum.batchCreatePosts(1n, ["post-cid-2", "post-cid-3"]);
 
       expect(await forum.getCommunityCount()).to.equal(1n);
-      expect(await forum.getPostCount()).to.equal(1n);
-      expect(await forum.getCommentCount()).to.equal(1n);
+      expect(await forum.getPostCount()).to.equal(3n);
     });
   });
 });
