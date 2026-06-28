@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ethers } from 'ethers'
 import contractArtifact from './DecentralizedForum.json'
+import { addJson, getJson } from './ipfs'
 import './App.css'
 
 const CONTRACT_ADDRESS = '0x5FbDB2315678afecb367f032d93F642f64180aa3'
-const MOCK_IPFS_STORAGE_KEY = 'reppit_mock_ipfs_metadata_v2'
 const COMMENTS_STORAGE_KEY = 'reppit_signed_comments_v1'
 
 type Community = {
@@ -53,7 +53,7 @@ type PostMetadata = {
   tags?: string[]
 }
 
-type MockIpfsRecord = PostMetadata | CommunityMetadata
+type IpfsMetadataRecord = PostMetadata | CommunityMetadata
 
 type SignedComment = {
   postId: string
@@ -72,11 +72,11 @@ declare global {
 
 const emptyAddress = '0x0000000000000000000000000000000000000000'
 
-const isPostMetadata = (value: MockIpfsRecord | null): value is PostMetadata => {
+const isPostMetadata = (value: IpfsMetadataRecord | null): value is PostMetadata => {
   return Boolean(value && 'title' in value && 'body' in value)
 }
 
-const isCommunityMetadata = (value: MockIpfsRecord | null): value is CommunityMetadata => {
+const isCommunityMetadata = (value: IpfsMetadataRecord | null): value is CommunityMetadata => {
   return Boolean(value && 'description' in value)
 }
 
@@ -84,6 +84,9 @@ function App() {
   const [walletAddress, setWalletAddress] = useState('')
   const [statusMessage, setStatusMessage] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
+
+  const [ipfsCache, setIpfsCache] = useState<Record<string, IpfsMetadataRecord>>({})
+  const requestedCids = useRef(new Set<string>())
 
   const [communities, setCommunities] = useState<Community[]>([])
   const [selectedCommunityId, setSelectedCommunityId] = useState('')
@@ -137,7 +140,7 @@ function App() {
           metadata.tags?.some((tag) => tag.toLowerCase().includes(query))
         )
       })
-  }, [posts, selectedCommunity?.isModerator, searchQuery])
+  }, [posts, selectedCommunity?.isModerator, searchQuery, ipfsCache])
 
   const selectedPost = visiblePosts.find((post) => post.id === selectedPostId) || visiblePosts[0]
 
@@ -162,6 +165,14 @@ function App() {
       setTopActiveUsers([])
     }
   }, [selectedCommunityId])
+
+  useEffect(() => {
+    communities.forEach((community) => fetchIpfsMetadata(community.metadataCID))
+  }, [communities])
+
+  useEffect(() => {
+    posts.forEach((post) => fetchIpfsMetadata(post.contentCID))
+  }, [posts])
 
   const getProvider = () => {
     if (!window.ethereum) {
@@ -213,42 +224,36 @@ function App() {
     setStatusMessage(message)
   }
 
-  const loadMockIpfs = (): Record<string, MockIpfsRecord> => {
-    const raw = localStorage.getItem(MOCK_IPFS_STORAGE_KEY)
-    if (!raw) return {}
-
-    try {
-      return JSON.parse(raw)
-    } catch (error) {
-      console.error('שגיאה בטעינת mock IPFS:', error)
-      return {}
-    }
-  }
-
-  const saveMockIpfs = (nextStore: Record<string, MockIpfsRecord>) => {
-    localStorage.setItem(MOCK_IPFS_STORAGE_KEY, JSON.stringify(nextStore))
-  }
-
-  const saveToMockIpfs = (metadata: MockIpfsRecord) => {
-    const cid = `local-json-${Date.now()}-${Math.random().toString(16).slice(2)}`
-    const store = loadMockIpfs()
-    saveMockIpfs({ ...store, [cid]: metadata })
+  // Publishes metadata to IPFS and seeds the cache immediately so the UI doesn't wait on a gateway round-trip for content we already have locally.
+  const publishToIpfs = async (metadata: IpfsMetadataRecord) => {
+    const cid = await addJson(metadata)
+    requestedCids.current.add(cid)
+    setIpfsCache((prev) => ({ ...prev, [cid]: metadata }))
     return cid
   }
 
-  const readFromMockIpfs = (cid: string): MockIpfsRecord | null => {
-    const store = loadMockIpfs()
-    return store[cid] || null
+  // Fetches metadata for a CID via the IPFS gateway and stores it in the cache. Safe to call repeatedly; in-flight/cached CIDs are skipped.
+  const fetchIpfsMetadata = (cid: string) => {
+    if (!cid || requestedCids.current.has(cid)) return
+
+    requestedCids.current.add(cid)
+
+    getJson<IpfsMetadataRecord>(cid)
+      .then((metadata) => setIpfsCache((prev) => ({ ...prev, [cid]: metadata })))
+      .catch((error) => {
+        console.error('שגיאה בטעינת תוכן מ-IPFS:', error)
+        requestedCids.current.delete(cid)
+      })
   }
 
   const getCommunityDescription = (community: Community) => {
-    const metadata = readFromMockIpfs(community.metadataCID)
+    const metadata = ipfsCache[community.metadataCID]
     if (isCommunityMetadata(metadata)) return metadata.description
-    return community.metadataCID
+    return 'טוען תיאור מ-IPFS...'
   }
 
   const getPostMetadata = (post: Post): PostMetadata => {
-    const metadata = readFromMockIpfs(post.contentCID)
+    const metadata = ipfsCache[post.contentCID]
 
     if (isPostMetadata(metadata)) {
       return metadata
@@ -256,7 +261,7 @@ function App() {
 
     return {
       title: `Post #${post.id}`,
-      body: post.contentCID,
+      body: 'טוען תוכן מ-IPFS...',
       tags: [],
     }
   }
@@ -428,7 +433,7 @@ function App() {
     }
 
     try {
-      const metadataCID = saveToMockIpfs({
+      const metadataCID = await publishToIpfs({
         description: newCommunityDesc.trim(),
         rules: ['Be respectful', 'Keep posts relevant', 'No spam'],
       })
@@ -458,7 +463,7 @@ function App() {
     }
 
     try {
-      const metadataCID = saveToMockIpfs({
+      const metadataCID = await publishToIpfs({
         description: newSubCommunityDesc.trim(),
         rules: ['Follow parent community rules', 'Keep discussions focused'],
       })
@@ -528,7 +533,7 @@ function App() {
         .map((tag) => tag.trim())
         .filter(Boolean)
 
-      const contentCID = saveToMockIpfs({
+      const contentCID = await publishToIpfs({
         title: postTitle.trim(),
         body: postBody.trim(),
         tags,
@@ -946,7 +951,7 @@ function App() {
                       onChange={(event) => setPostTags(event.target.value)}
                     />
                     <div className="form-footer">
-                      <small>נשמר כ־JSON ב־mock IPFS, וה־CID נשלח לחוזה.</small>
+                      <small>נשמר כ־JSON ב־IPFS, וה־CID נשלח לחוזה.</small>
                       <button className="primary-button" onClick={createPost}>Publish</button>
                     </div>
                   </section>
@@ -1142,7 +1147,7 @@ function App() {
                     <span>Comments</span>
                     <strong>{commentsForPost(selectedPost.id).length}</strong>
                     <span>Storage</span>
-                    <strong>mock IPFS</strong>
+                    <strong>IPFS</strong>
                   </div>
                 </>
               ) : (
