@@ -136,29 +136,30 @@ describe("DecentralizedForum", function () {
   });
 
   describe("moderators and bans", function () {
-    it("creates a moderator proposal instead of appointing directly (governance flow)", async function () {
+    it("records a recommendation instead of appointing directly (governance flow)", async function () {
       const forum = await deployForum();
 
       await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
 
-      await forum.addModerator(1n, user1.address);
+      await forum.recommendModerator(1n, user1.address);
 
-      // A single approval is below ADD_MODERATOR_APPROVALS_REQUIRED, so the
-      // candidate is not a moderator yet - only a pending proposal exists.
+      // A single recommendation is below MODERATOR_RECOMMENDATIONS_REQUIRED,
+      // so the candidate is not a moderator yet and has no pending offer.
       expect(await forum.isUserModeratorOfCommunity(1n, user1.address)).to.equal(false);
-      expect(await forum.hasApprovedModeratorProposal(1n, owner.address)).to.equal(true);
+      expect(await forum.hasRecommendedModerator(1n, user1.address, owner.address)).to.equal(true);
+      expect(await forum.hasPendingModeratorOffer(1n, user1.address)).to.equal(false);
     });
 
-    it("should not allow a non-moderator to add a moderator", async function () {
+    it("should not allow a non-member to recommend a moderator", async function () {
       const forum = await deployForum();
 
       await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
 
       await expect(
-        forum.connect(user1).addModerator(1n, user1.address)
-      ).to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
+        forum.connect(user2).recommendModerator(1n, user1.address)
+      ).to.be.revertedWithCustomError(forum, "OnlyCommunityMembersAllowed");
     });
 
     it("should allow moderator to ban and unban users", async function () {

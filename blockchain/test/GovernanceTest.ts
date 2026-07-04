@@ -71,51 +71,125 @@ describe("DecentralizedForum governance upgrade", function () {
     expect(top[0]).to.equal(user3.address);
   });
 
-  it("adds an appointed moderator only after 3 moderator approvals", async function () {
+  // Joins users 1-4 and returns a community where nobody but the creator is
+  // a moderator yet (no posts, so no activity-based promotion).
+  async function deployCommunityWithMembers() {
     const forum = await deployForum();
-
     await forum.createCommunity("react", "cid", "a community");
     await forum.connect(user1).joinCommunity(1n);
     await forum.connect(user2).joinCommunity(1n);
     await forum.connect(user3).joinCommunity(1n);
     await forum.connect(user4).joinCommunity(1n);
+    return forum;
+  }
 
-    await forum.connect(user1).createPost(1n, "post-1", "a title", "tag1,tag2");
-    await forum.connect(user2).createPost(1n, "post-2", "a title", "tag1,tag2");
+  it("opens a moderator offer only after 3 member recommendations, and requires acceptance", async function () {
+    const forum = await deployCommunityWithMembers();
 
-    await forum.proposeModerator(1n, user3.address);
+    await forum.recommendModerator(1n, user3.address);
+    await forum.connect(user1).recommendModerator(1n, user3.address);
+    expect(await forum.hasPendingModeratorOffer(1n, user3.address)).to.equal(false);
+
+    await forum.connect(user2).recommendModerator(1n, user3.address);
+    expect(await forum.hasPendingModeratorOffer(1n, user3.address)).to.equal(true);
+
+    // The offer alone does not grant the role - the candidate must accept.
     expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(false);
 
-    await forum.connect(user1).approveModeratorProposal(1n);
-    expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(false);
-
-    await forum.connect(user2).approveModeratorProposal(1n);
+    await forum.connect(user3).acceptModeratorRole(1n);
     expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(true);
 
     const role = await forum.getModeratorRole(1n, user3.address);
     expect(role[3]).to.equal(true);
   });
 
-  it("removes an appointed moderator only by removal vote", async function () {
-    const forum = await deployForum();
+  it("rejects double recommendations from the same member", async function () {
+    const forum = await deployCommunityWithMembers();
 
-    await forum.createCommunity("security", "cid", "a community");
-    await forum.connect(user1).joinCommunity(1n);
-    await forum.connect(user2).joinCommunity(1n);
-    await forum.connect(user3).joinCommunity(1n);
-    await forum.connect(user4).joinCommunity(1n);
+    await forum.connect(user1).recommendModerator(1n, user3.address);
 
-    await forum.connect(user1).createPost(1n, "post-1", "a title", "tag1,tag2");
-    await forum.connect(user2).createPost(1n, "post-2", "a title", "tag1,tag2");
+    await expect(
+      forum.connect(user1).recommendModerator(1n, user3.address)
+    ).to.be.revertedWithCustomError(forum, "AlreadyRecommended");
 
-    await forum.proposeModerator(1n, user3.address);
-    await forum.connect(user1).approveModeratorProposal(1n);
-    await forum.connect(user2).approveModeratorProposal(1n);
+    const status = await forum.getModeratorRecommendationStatus(1n, user3.address);
+    expect(status[0]).to.equal(1n);
+    expect(status[1]).to.equal(3n);
+  });
+
+  it("rejects self-recommendations", async function () {
+    const forum = await deployCommunityWithMembers();
+
+    await expect(
+      forum.connect(user3).recommendModerator(1n, user3.address)
+    ).to.be.revertedWithCustomError(forum, "CannotRecommendSelf");
+  });
+
+  it("lets a candidate decline, which restarts the recommendation round", async function () {
+    const forum = await deployCommunityWithMembers();
+
+    await forum.recommendModerator(1n, user3.address);
+    await forum.connect(user1).recommendModerator(1n, user3.address);
+    await forum.connect(user2).recommendModerator(1n, user3.address);
+
+    await forum.connect(user3).declineModeratorRole(1n);
+    expect(await forum.hasPendingModeratorOffer(1n, user3.address)).to.equal(false);
+    expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(false);
+
+    // Previous votes no longer count, but the same members may vote again.
+    const status = await forum.getModeratorRecommendationStatus(1n, user3.address);
+    expect(status[0]).to.equal(0n);
+    await forum.connect(user1).recommendModerator(1n, user3.address);
+  });
+
+  it("lets an appointed moderator resign", async function () {
+    const forum = await deployCommunityWithMembers();
+
+    await forum.recommendModerator(1n, user3.address);
+    await forum.connect(user1).recommendModerator(1n, user3.address);
+    await forum.connect(user2).recommendModerator(1n, user3.address);
+    await forum.connect(user3).acceptModeratorRole(1n);
     expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(true);
 
-    await forum.proposeRemoveModerator(1n, user3.address);
-    await forum.connect(user1).approveRemoveModeratorProposal(1n);
-
+    await forum.connect(user3).resignModerator(1n);
     expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(false);
+
+    // The creator cannot resign.
+    await expect(forum.resignModerator(1n)).to.be.revertedWithCustomError(
+      forum,
+      "CannotRemoveCreatorModerator"
+    );
+  });
+
+  it("removes an appointed moderator once at least half of the moderators approve", async function () {
+    const forum = await deployCommunityWithMembers();
+
+    // Appoint user3 and user4 -> moderators are: creator, user3, user4.
+    for (const candidate of [user3, user4]) {
+      await forum.recommendModerator(1n, candidate.address);
+      await forum.connect(user1).recommendModerator(1n, candidate.address);
+      await forum.connect(user2).recommendModerator(1n, candidate.address);
+      await forum.connect(candidate).acceptModeratorRole(1n);
+    }
+
+    expect(await forum.getModeratorCount(1n)).to.equal(3n);
+    expect(await forum.getRequiredRemovalApprovals(1n)).to.equal(2n);
+
+    await forum.proposeRemoveModerator(1n, user3.address);
+    expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(true);
+
+    await forum.connect(user4).approveRemoveModeratorProposal(1n);
+    expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(false);
+
+    const proposals = await forum.getRemovalProposalsByCommunity(1n);
+    expect(proposals.map((id: bigint) => id)).to.deep.equal([1n]);
+  });
+
+  it("resolves usernames to addresses", async function () {
+    const forum = await deployForum();
+
+    await forum.connect(user1).registerUsername("satoshi_99");
+    expect(await forum.getAddressByUsername("satoshi_99")).to.equal(user1.address);
+    expect(await forum.getAddressByUsername("nobody")).to.equal(ethers.ZeroAddress);
   });
 });

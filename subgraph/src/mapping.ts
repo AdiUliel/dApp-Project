@@ -10,6 +10,10 @@ import {
   PostRestored,
   ModeratorAdded,
   ModeratorRemoved,
+  ModeratorRecommended,
+  ModeratorOfferCreated,
+  ModeratorResigned,
+  RemoveModeratorProposalCreated,
   ActiveModeratorsUpdated,
   UsernameRegistered,
   UsernameChanged,
@@ -356,6 +360,50 @@ export function handleModeratorRemoved(event: ModeratorRemoved): void {
   if (!event.params.moderator.equals(event.params.removedBy)) {
     notify(event, event.params.moderator, 'MODERATOR_REMOVED', event.params.removedBy, event.params.communityId, '')
   }
+}
+
+export function handleModeratorRecommended(event: ModeratorRecommended): void {
+  recordActivity(
+    event,
+    event.params.recommender,
+    'MODERATOR_RECOMMENDED',
+    event.params.communityId,
+    event.params.candidate.toHexString()
+  )
+}
+
+// 3 recommendations reached: the candidate must now accept or decline.
+export function handleModeratorOfferCreated(event: ModeratorOfferCreated): void {
+  const community = Community.load(event.params.communityId.toString())
+  const detail = community != null ? community.name : ''
+
+  notify(
+    event,
+    event.params.candidate,
+    'MODERATOR_OFFER',
+    event.params.candidate,
+    event.params.communityId,
+    detail
+  )
+}
+
+export function handleModeratorResigned(event: ModeratorResigned): void {
+  recordActivity(event, event.params.moderator, 'MODERATOR_RESIGNED', event.params.communityId, '')
+}
+
+// A removal vote opened: every moderator (except the proposer) is asked to weigh in.
+export function handleRemoveModeratorProposalCreated(event: RemoveModeratorProposalCreated): void {
+  const community = Community.load(event.params.communityId.toString())
+  if (community == null) return
+
+  notifyModerators(
+    event,
+    community,
+    'REMOVAL_VOTE_PENDING',
+    event.params.proposer,
+    event.params.proposalId,
+    event.params.target.toHexString()
+  )
 }
 
 export function handleActiveModeratorsUpdated(event: ActiveModeratorsUpdated): void {

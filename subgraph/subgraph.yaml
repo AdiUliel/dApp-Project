@@ -56,6 +56,18 @@ dataSources:
         - event: ModeratorRemoved(indexed uint256,indexed address,indexed address,uint256)
           handler: handleModeratorRemoved
           receipt: true
+        - event: ModeratorRecommended(indexed uint256,indexed address,indexed address,uint256,uint256)
+          handler: handleModeratorRecommended
+          receipt: true
+        - event: ModeratorOfferCreated(indexed uint256,indexed address,uint256)
+          handler: handleModeratorOfferCreated
+          receipt: true
+        - event: ModeratorResigned(indexed uint256,indexed address,uint256)
+          handler: handleModeratorResigned
+          receipt: true
+        - event: RemoveModeratorProposalCreated(indexed uint256,indexed uint256,indexed address,address,uint256,uint256)
+          handler: handleRemoveModeratorProposalCreated
+          receipt: true
         - event: ActiveModeratorsUpdated(indexed uint256,address,address,uint256)
           handler: handleActiveModeratorsUpdated
           receipt: true

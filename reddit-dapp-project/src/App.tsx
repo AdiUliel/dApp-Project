@@ -42,6 +42,7 @@ type Community = {
   isBanned: boolean
   parentCommunityId: string
   moderatorRole?: ModeratorRole
+  hasModeratorOffer: boolean
 }
 
 type ModeratorRole = {
@@ -125,6 +126,16 @@ type NotificationItem = {
   detail: string
   actorLabel: string
   timestamp: number
+}
+
+type RemovalVote = {
+  proposalId: string
+  communityId: string
+  communityName: string
+  target: string
+  approvals: number
+  required: number
+  approvedByMe: boolean
 }
 
 type SearchFilter = 'all' | 'posts' | 'communities' | 'users' | 'tags'
@@ -221,11 +232,10 @@ function App() {
 
   const [moderators, setModerators] = useState<ModeratorDisplay[]>([])
   const [topActiveUsers, setTopActiveUsers] = useState<string[]>([])
-  const [candidateAddress, setCandidateAddress] = useState('')
-  const [addProposalId, setAddProposalId] = useState('')
-  const [removeTargetAddress, setRemoveTargetAddress] = useState('')
-  const [removeProposalId, setRemoveProposalId] = useState('')
+  const [recommendInput, setRecommendInput] = useState('')
+  const [removeTargetInput, setRemoveTargetInput] = useState('')
   const [showModeratorActionsModal, setShowModeratorActionsModal] = useState(false)
+  const [removalVotes, setRemovalVotes] = useState<RemovalVote[]>([])
 
   const [profileAddress, setProfileAddress] = useState('')
   const [profileData, setProfileData] = useState<GraphUser | null>(null)
@@ -234,6 +244,12 @@ function App() {
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const [readNotificationIds, setReadNotificationIds] = useState<string[]>([])
+  const [showNotificationsPanel, setShowNotificationsPanel] = useState(false)
+
+  // Deployment fingerprint (genesis block hash) that scopes localStorage keys,
+  // so off-chain comments and read-notification marks from an older chain
+  // deployment never leak into a fresh one.
+  const [storageScope, setStorageScope] = useState('')
 
   const [searchFilter, setSearchFilter] = useState<SearchFilter>('all')
   const [searchResults, setSearchResults] = useState<SearchResults | null>(null)
@@ -281,10 +297,44 @@ function App() {
     return notifications.filter((notification) => !read.has(notification.id)).length
   }, [notifications, readNotificationIds])
 
+  const moderatorOffers = useMemo(() => communities.filter((community) => community.hasModeratorOffer), [communities])
+
+  const pendingRemovalVotes = useMemo(() => removalVotes.filter((vote) => !vote.approvedByMe), [removalVotes])
+
+  // The bell badge counts unread notifications plus items waiting for my action.
+  const bellCount = unreadNotificationsCount + moderatorOffers.length + pendingRemovalVotes.length
+
+  // Resolve the deployment fingerprint as soon as a provider is available.
   useEffect(() => {
+    if (!window.ethereum) return
+
+    let cancelled = false
+
+    getProvider()
+      .getBlock(0)
+      .then((genesis) => {
+        if (!cancelled) setStorageScope(genesis?.hash ? genesis.hash.slice(2, 12) : 'default')
+      })
+      .catch(() => {
+        if (!cancelled) setStorageScope('default')
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [walletAddress])
+
+  useEffect(() => {
+    if (!storageScope) return
+
+    // Data under the old unscoped keys belongs to previous deployments where
+    // post ids restart from 1, so it must not be shown - drop it for good.
+    localStorage.removeItem(COMMENTS_STORAGE_KEY)
+    localStorage.removeItem(READ_NOTIFICATIONS_KEY)
+
     loadLocalComments()
     setReadNotificationIds(loadReadNotificationIds())
-  }, [])
+  }, [storageScope])
 
   useEffect(() => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, lang)
@@ -294,9 +344,14 @@ function App() {
     if (walletAddress) {
       loadCommunities(walletAddress, true)
       loadUsername(walletAddress)
-      loadNotifications(walletAddress)
     }
   }, [walletAddress])
+
+  useEffect(() => {
+    if (walletAddress && storageScope) {
+      loadNotifications(walletAddress)
+    }
+  }, [walletAddress, storageScope])
 
   useEffect(() => {
     const addresses = new Set<string>()
@@ -318,6 +373,13 @@ function App() {
     const provider = new ethers.BrowserProvider(window.ethereum as ethers.Eip1193Provider)
     const contract = new ethers.Contract(CONTRACT_ADDRESS, contractArtifact.abi, provider)
 
+    const flashModNotification = (message: string) => {
+      setModNotification(message)
+      setTimeout(() => {
+        if (!cancelled) setModNotification('')
+      }, 8000)
+    }
+
     const announceNewModerator = async (communityId: string) => {
       if (knownModeratorCommunities.current.has(communityId)) return
       knownModeratorCommunities.current.add(communityId)
@@ -325,12 +387,21 @@ function App() {
       const name = await getCommunityName(communityId)
       if (cancelled) return
 
-      setModNotification(t('becameModerator', { name }))
-      setTimeout(() => {
-        if (!cancelled) setModNotification('')
-      }, 6000)
-
+      flashModNotification(t('becameModerator', { name }))
       loadCommunities(walletAddress)
+      loadNotifications(walletAddress)
+    }
+
+    const announceModeratorRemoved = async (communityId: string) => {
+      if (!knownModeratorCommunities.current.has(communityId)) return
+      knownModeratorCommunities.current.delete(communityId)
+
+      const name = await getCommunityName(communityId)
+      if (cancelled) return
+
+      flashModNotification(t('noLongerModerator', { name }))
+      loadCommunities(walletAddress)
+      loadNotifications(walletAddress)
     }
 
     const onModeratorAdded = (communityId: bigint, moderator: string) => {
@@ -339,20 +410,73 @@ function App() {
       }
     }
 
-    const onActiveModeratorsUpdated = (communityId: bigint, first: string, second: string) => {
-      const address = walletAddress.toLowerCase()
-      if (first.toLowerCase() === address || second.toLowerCase() === address) {
-        announceNewModerator(communityId.toString())
+    const onModeratorRemoved = (communityId: bigint, moderator: string) => {
+      if (moderator.toLowerCase() === walletAddress.toLowerCase()) {
+        announceModeratorRemoved(communityId.toString())
       }
     }
 
+    const onActiveModeratorsUpdated = async (communityId: bigint, first: string, second: string) => {
+      const address = walletAddress.toLowerCase()
+
+      if (first.toLowerCase() === address || second.toLowerCase() === address) {
+        announceNewModerator(communityId.toString())
+        return
+      }
+
+      // I may have just been displaced from the automatic active pair; only
+      // announce if I hold no other moderator role in that community.
+      if (knownModeratorCommunities.current.has(communityId.toString())) {
+        try {
+          const stillModerator = await contract.isUserModeratorOfCommunity(communityId, walletAddress)
+          if (!stillModerator) announceModeratorRemoved(communityId.toString())
+        } catch (error) {
+          console.error('Failed to re-check moderator status:', error)
+        }
+      }
+    }
+
+    const onModeratorOfferCreated = async (communityId: bigint, candidate: string) => {
+      if (candidate.toLowerCase() !== walletAddress.toLowerCase()) return
+
+      const name = await getCommunityName(communityId.toString())
+      if (cancelled) return
+
+      flashModNotification(t('moderatorOfferToast', { name }))
+      loadCommunities(walletAddress)
+      loadNotifications(walletAddress)
+    }
+
+    const onRemovalProposalCreated = async (
+      _proposalId: bigint,
+      communityId: bigint,
+      _target: string,
+      proposer: string
+    ) => {
+      if (proposer.toLowerCase() === walletAddress.toLowerCase()) return
+      if (!knownModeratorCommunities.current.has(communityId.toString())) return
+
+      const name = await getCommunityName(communityId.toString())
+      if (cancelled) return
+
+      flashModNotification(t('removalVoteToast', { name }))
+      loadCommunities(walletAddress)
+      loadNotifications(walletAddress)
+    }
+
     contract.on('ModeratorAdded', onModeratorAdded)
+    contract.on('ModeratorRemoved', onModeratorRemoved)
     contract.on('ActiveModeratorsUpdated', onActiveModeratorsUpdated)
+    contract.on('ModeratorOfferCreated', onModeratorOfferCreated)
+    contract.on('RemoveModeratorProposalCreated', onRemovalProposalCreated)
 
     return () => {
       cancelled = true
       contract.off('ModeratorAdded', onModeratorAdded)
+      contract.off('ModeratorRemoved', onModeratorRemoved)
       contract.off('ActiveModeratorsUpdated', onActiveModeratorsUpdated)
+      contract.off('ModeratorOfferCreated', onModeratorOfferCreated)
+      contract.off('RemoveModeratorProposalCreated', onRemovalProposalCreated)
     }
   }, [walletAddress, lang])
 
@@ -645,12 +769,19 @@ function App() {
         let isMember = false
         let isModerator = false
         let isBanned = false
+        let hasModeratorOffer = false
         let moderatorRole: ModeratorRole | undefined
 
         if (account) {
           isMember = await contract.isUserMemberOfCommunity(communityId, account)
           isModerator = await contract.isUserModeratorOfCommunity(communityId, account)
           isBanned = await contract.isUserBannedFromCommunity(communityId, account)
+
+          try {
+            hasModeratorOffer = await contract.hasPendingModeratorOffer(communityId, account)
+          } catch {
+            hasModeratorOffer = false
+          }
 
           try {
             const role = await contract.getModeratorRole(communityId, account)
@@ -676,6 +807,7 @@ function App() {
           isBanned,
           parentCommunityId,
           moderatorRole,
+          hasModeratorOffer,
         })
       }
 
@@ -688,9 +820,56 @@ function App() {
           }
         })
       }
+
+      loadRemovalVotes(loadedCommunities, account)
     } catch (error) {
       console.error('Failed to load communities:', error)
       setTemporaryStatus(t('loadCommunitiesFailed'))
+    }
+  }
+
+  // Open (not yet executed) moderator-removal votes in communities I moderate,
+  // shown in the notifications panel so every moderator can weigh in.
+  const loadRemovalVotes = async (communityList: Community[], account: string) => {
+    if (!account) {
+      setRemovalVotes([])
+      return
+    }
+
+    try {
+      const contract = await getContract(false)
+      const votes: RemovalVote[] = []
+
+      for (const community of communityList) {
+        if (!community.isModerator) continue
+
+        const proposalIds = await contract.getRemovalProposalsByCommunity(community.id)
+        if (proposalIds.length === 0) continue
+
+        const required = await contract.getRequiredRemovalApprovals(community.id)
+
+        for (const proposalId of proposalIds) {
+          const proposal = await contract.getRemoveModeratorProposal(proposalId)
+          if (proposal[5]) continue // already executed
+
+          const approvedByMe = await contract.hasApprovedRemoveModeratorProposal(proposalId, account)
+
+          votes.push({
+            proposalId: proposal[0].toString(),
+            communityId: proposal[1].toString(),
+            communityName: community.name,
+            target: proposal[2],
+            approvals: Number(proposal[4]),
+            required: Number(required),
+            approvedByMe,
+          })
+        }
+      }
+
+      setRemovalVotes(votes)
+    } catch (error) {
+      console.error('Failed to load removal votes:', error)
+      setRemovalVotes([])
     }
   }
 
@@ -921,30 +1100,36 @@ function App() {
     }
   }
 
-  const loadLocalComments = () => {
-    const rawComments = localStorage.getItem(COMMENTS_STORAGE_KEY)
+  const scopedStorageKey = (base: string) => (storageScope ? `${base}_${storageScope}` : '')
 
-    if (!rawComments) {
-      setComments([])
-      return
-    }
+  const readStoredComments = (): SignedComment[] => {
+    const key = scopedStorageKey(COMMENTS_STORAGE_KEY)
+    if (!key) return []
 
     try {
-      setComments(JSON.parse(rawComments))
+      return JSON.parse(localStorage.getItem(key) || '[]')
     } catch (error) {
       console.error('Failed to load local comments:', error)
-      setComments([])
+      return []
     }
   }
 
+  const loadLocalComments = () => {
+    setComments(readStoredComments())
+  }
+
   const saveLocalComments = (nextComments: SignedComment[]) => {
-    localStorage.setItem(COMMENTS_STORAGE_KEY, JSON.stringify(nextComments))
+    const key = scopedStorageKey(COMMENTS_STORAGE_KEY)
+    if (key) localStorage.setItem(key, JSON.stringify(nextComments))
     setComments(nextComments)
   }
 
   const loadReadNotificationIds = (): string[] => {
+    const key = scopedStorageKey(READ_NOTIFICATIONS_KEY)
+    if (!key) return []
+
     try {
-      return JSON.parse(localStorage.getItem(READ_NOTIFICATIONS_KEY) || '[]')
+      return JSON.parse(localStorage.getItem(key) || '[]')
     } catch {
       return []
     }
@@ -952,7 +1137,8 @@ function App() {
 
   const markAllNotificationsRead = () => {
     const ids = notifications.map((notification) => notification.id)
-    localStorage.setItem(READ_NOTIFICATIONS_KEY, JSON.stringify(ids))
+    const key = scopedStorageKey(READ_NOTIFICATIONS_KEY)
+    if (key) localStorage.setItem(key, JSON.stringify(ids))
     setReadNotificationIds(ids)
   }
 
@@ -982,8 +1168,7 @@ function App() {
 
     if (myPosts) {
       const myPostsById = new Map(myPosts.posts.map((post) => [post.id, post.title]))
-      const rawComments = localStorage.getItem(COMMENTS_STORAGE_KEY)
-      const localComments: SignedComment[] = rawComments ? JSON.parse(rawComments) : []
+      const localComments = readStoredComments()
 
       for (const comment of localComments) {
         if (myPostsById.has(comment.postId) && comment.author.toLowerCase() !== account.toLowerCase()) {
@@ -1274,57 +1459,122 @@ function App() {
     setSearchLoading(false)
   }
 
-  const proposeModerator = async () => {
-    if (!selectedCommunityId || !candidateAddress.trim()) {
+  // Accepts a username (with or without @) or a full 0x address and resolves
+  // it to an address via the contract's username registry.
+  const resolveUserInput = async (input: string): Promise<string | null> => {
+    const trimmed = input.trim().replace(/^@/, '')
+
+    if (/^0x[0-9a-fA-F]{40}$/.test(trimmed)) {
+      return trimmed
+    }
+
+    try {
+      const contract = await getContract(false)
+      const address = await contract.getAddressByUsername(trimmed)
+      if (address && address !== emptyAddress) return address
+    } catch (error) {
+      console.error('Username lookup failed:', error)
+    }
+
+    return null
+  }
+
+  const recommendModerator = async () => {
+    if (!selectedCommunityId || !recommendInput.trim()) {
       alert(t('enterAddress'))
       return
     }
 
-    try {
-      const contract = await getContract(true)
-      const tx = await contract.proposeModerator(selectedCommunityId, candidateAddress.trim())
-      setTemporaryStatus(t('nominationSent'))
-      await tx.wait()
-      setCandidateAddress('')
-      await loadModeratorInfo(selectedCommunityId)
-    } catch (error) {
-      console.error('Moderator nomination failed:', error)
-      alert(t('nominationFailed'))
-    }
-  }
-
-  const approveModeratorProposal = async () => {
-    if (!addProposalId.trim()) {
-      alert(t('enterProposalId'))
+    const candidate = await resolveUserInput(recommendInput)
+    if (!candidate) {
+      alert(t('userNotFound'))
       return
     }
 
     try {
       const contract = await getContract(true)
-      const tx = await contract.approveModeratorProposal(addProposalId.trim())
-      setTemporaryStatus(t('approvalSent'))
+      const tx = await contract.recommendModerator(selectedCommunityId, candidate)
+      setTemporaryStatus(t('recommendationSending'))
       await tx.wait()
-      setAddProposalId('')
-      await loadCommunities()
+      setRecommendInput('')
+
+      const reader = await getContract(false)
+      const status = await reader.getModeratorRecommendationStatus(selectedCommunityId, candidate)
+      setTemporaryStatus(
+        t('recommendationSent', { count: status[0].toString(), required: status[1].toString() })
+      )
+
       await loadModeratorInfo(selectedCommunityId)
     } catch (error) {
-      console.error('Proposal approval failed:', error)
-      alert(t('approvalFailed'))
+      console.error('Moderator recommendation failed:', error)
+      alert(t('recommendationFailed'))
+    }
+  }
+
+  const acceptModeratorOffer = async (communityId: string) => {
+    try {
+      const contract = await getContract(true)
+      const tx = await contract.acceptModeratorRole(communityId)
+      setTemporaryStatus(t('acceptingRole'))
+      await tx.wait()
+      await loadCommunities()
+      if (communityId === selectedCommunityId) await loadModeratorInfo(communityId)
+    } catch (error) {
+      console.error('Accepting moderator role failed:', error)
+      alert(t('offerActionFailed'))
+    }
+  }
+
+  const declineModeratorOffer = async (communityId: string) => {
+    try {
+      const contract = await getContract(true)
+      const tx = await contract.declineModeratorRole(communityId)
+      setTemporaryStatus(t('decliningRole'))
+      await tx.wait()
+      setTemporaryStatus(t('roleDeclined'))
+      await loadCommunities()
+    } catch (error) {
+      console.error('Declining moderator role failed:', error)
+      alert(t('offerActionFailed'))
+    }
+  }
+
+  const resignFromModeration = async (communityId: string, communityName: string) => {
+    if (!window.confirm(t('resignConfirm', { name: communityName }))) return
+
+    try {
+      const contract = await getContract(true)
+      const tx = await contract.resignModerator(communityId)
+      setTemporaryStatus(t('resigning'))
+      await tx.wait()
+      setShowModeratorActionsModal(false)
+      await loadCommunities()
+      if (communityId === selectedCommunityId) await loadModeratorInfo(communityId)
+    } catch (error) {
+      console.error('Resignation failed:', error)
+      alert(t('resignFailed'))
     }
   }
 
   const proposeRemoveModerator = async () => {
-    if (!selectedCommunityId || !removeTargetAddress.trim()) {
+    if (!selectedCommunityId || !removeTargetInput.trim()) {
       alert(t('enterRemovalAddress'))
+      return
+    }
+
+    const target = await resolveUserInput(removeTargetInput)
+    if (!target) {
+      alert(t('userNotFound'))
       return
     }
 
     try {
       const contract = await getContract(true)
-      const tx = await contract.proposeRemoveModerator(selectedCommunityId, removeTargetAddress.trim())
+      const tx = await contract.proposeRemoveModerator(selectedCommunityId, target)
       setTemporaryStatus(t('removalSent'))
       await tx.wait()
-      setRemoveTargetAddress('')
+      setRemoveTargetInput('')
+      await loadCommunities()
       await loadModeratorInfo(selectedCommunityId)
     } catch (error) {
       console.error('Removal proposal failed:', error)
@@ -1332,20 +1582,14 @@ function App() {
     }
   }
 
-  const approveRemoveModeratorProposal = async () => {
-    if (!removeProposalId.trim()) {
-      alert(t('enterRemovalId'))
-      return
-    }
-
+  const approveRemovalVote = async (proposalId: string) => {
     try {
       const contract = await getContract(true)
-      const tx = await contract.approveRemoveModeratorProposal(removeProposalId.trim())
+      const tx = await contract.approveRemoveModeratorProposal(proposalId)
       setTemporaryStatus(t('removalApprovalSent'))
       await tx.wait()
-      setRemoveProposalId('')
       await loadCommunities()
-      await loadModeratorInfo(selectedCommunityId)
+      if (selectedCommunityId) await loadModeratorInfo(selectedCommunityId)
     } catch (error) {
       console.error('Removal approval failed:', error)
       alert(t('removalApprovalFailed'))
@@ -1417,14 +1661,20 @@ function App() {
   const submitFlaggedComment = async (postId: string) => {
     const content = (newCommentByPost[postId] || '').trim()
 
-    try {
-      let imageCid = ''
-      const image = commentImageByPost[postId]
-      if (image) {
-        setTemporaryStatus(t('uploadingImages'))
+    let imageCid = ''
+    const image = commentImageByPost[postId]
+    if (image) {
+      setTemporaryStatus(t('uploadingImages'))
+      try {
         imageCid = await addFile(image)
+      } catch (error) {
+        console.error('Comment image upload failed:', error)
+        alert(t('imageUploadFailed'))
+        return
       }
+    }
 
+    try {
       const contract = await getContract(true)
       const tx = await contract.submitFlaggedComment(postId, content, imageCid)
       await tx.wait()
@@ -1470,14 +1720,22 @@ function App() {
       return
     }
 
-    try {
-      let imageCid = ''
-      const image = commentImageByPost[postId]
-      if (image) {
-        setTemporaryStatus(t('uploadingImages'))
+    // Image pinning happens before signing and has its own error message, so a
+    // Pinata failure is never misreported as a MetaMask signing problem.
+    let imageCid = ''
+    const image = commentImageByPost[postId]
+    if (image) {
+      setTemporaryStatus(t('uploadingImages'))
+      try {
         imageCid = await addFile(image)
+      } catch (error) {
+        console.error('Comment image upload failed:', error)
+        alert(t('imageUploadFailed'))
+        return
       }
+    }
 
+    try {
       const provider = getProvider()
       const signer = await provider.getSigner()
       const author = await signer.getAddress()
@@ -2149,6 +2407,96 @@ function App() {
     )
   }
 
+  // Items waiting for the user's decision: moderator nominations to accept or
+  // decline, and open removal votes in communities they moderate.
+  const renderActionItems = () => {
+    if (moderatorOffers.length === 0 && removalVotes.length === 0) return null
+
+    return (
+      <div className="action-items">
+        {moderatorOffers.map((community) => (
+          <div className="notification-item unread action-item" key={`offer-${community.id}`}>
+            <strong>{t('offerLine', { name: community.name })}</strong>
+            <div className="review-actions">
+              <button className="primary-button" onClick={() => acceptModeratorOffer(community.id)}>
+                {t('acceptRole')}
+              </button>
+              <button className="ghost-button" onClick={() => declineModeratorOffer(community.id)}>
+                {t('declineRole')}
+              </button>
+            </div>
+          </div>
+        ))}
+
+        {removalVotes.map((vote) => (
+          <div
+            className={`notification-item action-item ${vote.approvedByMe ? '' : 'unread'}`}
+            key={`removal-${vote.proposalId}`}
+          >
+            <strong>
+              {t('removalVoteLine', {
+                target: formatUser(vote.target),
+                name: vote.communityName,
+              })}
+            </strong>
+            <small>
+              {t('removalVoteProgress', { approvals: vote.approvals, required: vote.required })}
+            </small>
+            {vote.approvedByMe ? (
+              <small>{t('alreadyApprovedRemoval')}</small>
+            ) : (
+              <div className="review-actions">
+                <button className="danger-button" onClick={() => approveRemovalVote(vote.proposalId)}>
+                  {t('approveRemoval')}
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  const renderNotificationsList = () => {
+    if (notifications.length === 0) {
+      return <p className="muted-text">{t('noNotifications')}</p>
+    }
+
+    return (
+      <div className="notification-list">
+        {notifications.map((notification) => {
+          const isRead = readNotificationIds.includes(notification.id)
+          return (
+            <div className={`notification-item ${isRead ? '' : 'unread'}`} key={notification.id}>
+              <strong>{notifLabel(notification.type)}</strong>
+              <small>
+                {notification.detail && `"${notification.detail}" · `}
+                {notification.actorLabel &&
+                  `${notification.actorLabel.startsWith('0x') ? formatUser(notification.actorLabel) : notification.actorLabel} · `}
+                {formatDate(notification.timestamp)}
+              </small>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  const renderNotificationsDropdown = () => (
+    <div className="notifications-dropdown panel">
+      <div className="row-heading">
+        <h3>{t('notificationsTitle')}</h3>
+        {notifications.length > 0 && (
+          <button className="ghost-button" onClick={markAllNotificationsRead}>
+            {t('markAllRead')}
+          </button>
+        )}
+      </div>
+      {renderActionItems()}
+      {renderNotificationsList()}
+    </div>
+  )
+
   const renderProfileView = () => {
     const isOwnProfile = profileAddress.toLowerCase() === walletAddress.toLowerCase()
     const displayName =
@@ -2205,9 +2553,7 @@ function App() {
             <div className="row-heading">
               <h3>
                 {t('notificationsTitle')}{' '}
-                {unreadNotificationsCount > 0 && (
-                  <span className="badge warning">{t('newBadge', { count: unreadNotificationsCount })}</span>
-                )}
+                {bellCount > 0 && <span className="badge warning">{t('newBadge', { count: bellCount })}</span>}
               </h3>
               {notifications.length > 0 && (
                 <button className="ghost-button" onClick={markAllNotificationsRead}>
@@ -2217,26 +2563,8 @@ function App() {
             </div>
             <p className="muted-text">{t('commentReplyNote')}</p>
 
-            {notifications.length === 0 ? (
-              <p className="muted-text">{t('noNotifications')}</p>
-            ) : (
-              <div className="notification-list">
-                {notifications.map((notification) => {
-                  const isRead = readNotificationIds.includes(notification.id)
-                  return (
-                    <div className={`notification-item ${isRead ? '' : 'unread'}`} key={notification.id}>
-                      <strong>{notifLabel(notification.type)}</strong>
-                      <small>
-                        {notification.detail && `"${notification.detail}" · `}
-                        {notification.actorLabel &&
-                          `${notification.actorLabel.startsWith('0x') ? formatUser(notification.actorLabel) : notification.actorLabel} · `}
-                        {formatDate(notification.timestamp)}
-                      </small>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+            {renderActionItems()}
+            {renderNotificationsList()}
           </section>
         )}
 
@@ -2302,12 +2630,26 @@ function App() {
           </div>
 
           {walletAddress && (
+            <div className="notifications-wrapper">
+              <button
+                className={`ghost-button topbar-nav-button bell-button ${showNotificationsPanel ? 'active-nav' : ''}`}
+                onClick={() => setShowNotificationsPanel((previous) => !previous)}
+                aria-label={t('notificationsTitle')}
+                title={t('notificationsTitle')}
+              >
+                🔔
+                {bellCount > 0 && <span className="notification-badge">{bellCount}</span>}
+              </button>
+              {showNotificationsPanel && renderNotificationsDropdown()}
+            </div>
+          )}
+
+          {walletAddress && (
             <button
               className={`ghost-button topbar-nav-button ${view === 'profile' ? 'active-nav' : ''}`}
               onClick={() => openProfile(walletAddress)}
             >
               @{username || formatAddress(walletAddress)}
-              {unreadNotificationsCount > 0 && <span className="notification-badge">{unreadNotificationsCount}</span>}
             </button>
           )}
 
@@ -2407,6 +2749,22 @@ function App() {
                               topActiveUsers.map((address) => <small key={address}>{formatUser(address)}</small>)
                             )}
                           </div>
+
+                          {selectedCommunity.isMember && (
+                            <div className="recommend-box">
+                              <strong>{t('recommendTitle')}</strong>
+                              <p className="muted-text">{t('recommendBody')}</p>
+                              <input
+                                type="text"
+                                placeholder={t('recommendPh')}
+                                value={recommendInput}
+                                onChange={(event) => setRecommendInput(event.target.value)}
+                              />
+                              <button className="secondary-button full" onClick={recommendModerator}>
+                                {t('recommendButton')}
+                              </button>
+                            </div>
+                          )}
 
                           {selectedCommunity.isModerator && (
                             <button
@@ -2564,45 +2922,54 @@ function App() {
           {showModeratorActionsModal && selectedCommunity && (
             <Modal title={t('moderatorActions')} onClose={() => setShowModeratorActionsModal(false)}>
               <div className="governance-tools">
-                <input
-                  type="text"
-                  placeholder={t('nominatePh')}
-                  value={candidateAddress}
-                  onChange={(event) => setCandidateAddress(event.target.value)}
-                />
-                <button className="ghost-button full" onClick={proposeModerator}>
-                  {t('openNomination')}
-                </button>
-
-                <input
-                  type="text"
-                  placeholder={t('proposalIdPh')}
-                  value={addProposalId}
-                  onChange={(event) => setAddProposalId(event.target.value)}
-                />
-                <button className="secondary-button full" onClick={approveModeratorProposal}>
-                  {t('approveNomination')}
-                </button>
-
+                <p className="muted-text">{t('removalIntro')}</p>
                 <input
                   type="text"
                   placeholder={t('removeAddrPh')}
-                  value={removeTargetAddress}
-                  onChange={(event) => setRemoveTargetAddress(event.target.value)}
+                  value={removeTargetInput}
+                  onChange={(event) => setRemoveTargetInput(event.target.value)}
                 />
                 <button className="danger-button full" onClick={proposeRemoveModerator}>
                   {t('openRemoval')}
                 </button>
 
-                <input
-                  type="text"
-                  placeholder={t('removalIdPh')}
-                  value={removeProposalId}
-                  onChange={(event) => setRemoveProposalId(event.target.value)}
-                />
-                <button className="danger-button full" onClick={approveRemoveModeratorProposal}>
-                  {t('approveRemoval')}
-                </button>
+                {removalVotes.filter((vote) => vote.communityId === selectedCommunity.id).length > 0 && (
+                  <div className="removal-votes-box">
+                    <strong>{t('removalVotesSection')}</strong>
+                    {removalVotes
+                      .filter((vote) => vote.communityId === selectedCommunity.id)
+                      .map((vote) => (
+                        <div className="notification-item" key={`modal-removal-${vote.proposalId}`}>
+                          <strong>
+                            {t('removalVoteLine', { target: formatUser(vote.target), name: vote.communityName })}
+                          </strong>
+                          <small>
+                            {t('removalVoteProgress', { approvals: vote.approvals, required: vote.required })}
+                          </small>
+                          {vote.approvedByMe ? (
+                            <small>{t('alreadyApprovedRemoval')}</small>
+                          ) : (
+                            <button className="danger-button" onClick={() => approveRemovalVote(vote.proposalId)}>
+                              {t('approveRemoval')}
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                )}
+
+                {!selectedCommunity.moderatorRole?.isCreatorModerator && (
+                  <>
+                    <hr className="tools-divider" />
+                    <p className="muted-text">{t('resignBody')}</p>
+                    <button
+                      className="ghost-button full"
+                      onClick={() => resignFromModeration(selectedCommunity.id, selectedCommunity.name)}
+                    >
+                      {t('resignButton')}
+                    </button>
+                  </>
+                )}
               </div>
             </Modal>
           )}

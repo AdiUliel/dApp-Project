@@ -4,11 +4,10 @@ pragma solidity ^0.8.28;
 contract DecentralizedForum {
     uint256 private nextCommunityId = 1;
     uint256 private nextPostId = 1;
-    uint256 private nextModeratorProposalId = 1;
     uint256 private nextRemoveModeratorProposalId = 1;
 
     uint256 public constant POST_ACTIVITY_POINTS = 5;
-    uint256 public constant ADD_MODERATOR_APPROVALS_REQUIRED = 3;
+    uint256 public constant MODERATOR_RECOMMENDATIONS_REQUIRED = 3;
     uint256 public constant USERNAME_CHANGE_FEE = 0.05 ether;
     uint256 public constant USERNAME_MIN_LENGTH = 3;
     uint256 public constant USERNAME_MAX_LENGTH = 20;
@@ -33,16 +32,6 @@ contract DecentralizedForum {
         uint256 createdAt;
         bool exists;
         bool hidden;
-    }
-
-    struct ModeratorProposal {
-        uint256 id;
-        uint256 communityId;
-        address candidate;
-        address proposer;
-        uint256 approvals;
-        bool executed;
-        bool exists;
     }
 
     struct RemoveModeratorProposal {
@@ -80,11 +69,19 @@ contract DecentralizedForum {
     mapping(uint256 => address[]) private moderatorCandidates;
     mapping(uint256 => mapping(address => bool)) private isModeratorCandidateKnown;
 
-    mapping(uint256 => ModeratorProposal) private moderatorProposals;
-    mapping(uint256 => mapping(address => bool)) private moderatorProposalApprovedBy;
+    // Anonymous member recommendations: MODERATOR_RECOMMENDATIONS_REQUIRED
+    // distinct votes open a moderator offer the candidate must accept.
+    // Rounds invalidate old votes whenever an offer is resolved or cancelled,
+    // so a fresh nomination always starts from zero.
+    mapping(uint256 => mapping(address => uint256)) private recommendationRound;
+    mapping(uint256 => mapping(address => uint256)) private recommendationCount;
+    mapping(bytes32 => bool) private recommendedInRound;
+    mapping(uint256 => mapping(address => bool)) private pendingModeratorOffers;
+    mapping(uint256 => mapping(address => bool)) private resignedModerators;
 
     mapping(uint256 => RemoveModeratorProposal) private removeModeratorProposals;
     mapping(uint256 => mapping(address => bool)) private removeModeratorProposalApprovedBy;
+    mapping(uint256 => uint256[]) private removalProposalIdsByCommunity;
 
     mapping(address => uint256) public userPostCount;
     mapping(address => uint256) public userCommunityCount;
@@ -95,6 +92,7 @@ contract DecentralizedForum {
 
     mapping(address => string) private usernames;
     mapping(bytes32 => bool) private usernameExists;
+    mapping(bytes32 => address) private usernameOwner;
 
     mapping(uint256 => mapping(address => int8)) public postVotes;
     mapping(uint256 => int256) public postScore;
@@ -142,6 +140,10 @@ contract DecentralizedForum {
     error CannotRemoveActiveModeratorWithVote();
     error ModeratorProposalAlreadyApproved();
     error ProposalAlreadyExecuted();
+    error AlreadyRecommended();
+    error CannotRecommendSelf();
+    error ModeratorOfferAlreadyPending();
+    error NoPendingModeratorOffer();
     error PostAlreadyHidden();
     error PostNotHidden();
     error EmptyUsername();
@@ -219,28 +221,36 @@ contract DecentralizedForum {
         uint256 updatedAt
     );
 
-    event ModeratorProposalCreated(
-        uint256 indexed proposalId,
+    event ModeratorRecommended(
         uint256 indexed communityId,
         address indexed candidate,
-        address proposer,
-        uint256 approvals,
+        address indexed recommender,
+        uint256 recommendations,
+        uint256 recommendedAt
+    );
+
+    event ModeratorOfferCreated(
+        uint256 indexed communityId,
+        address indexed candidate,
         uint256 createdAt
     );
 
-    event ModeratorProposalApproved(
-        uint256 indexed proposalId,
-        uint256 indexed communityId,
-        address indexed approver,
-        uint256 approvals,
-        uint256 approvedAt
-    );
-
-    event ModeratorProposalExecuted(
-        uint256 indexed proposalId,
+    event ModeratorOfferAccepted(
         uint256 indexed communityId,
         address indexed candidate,
-        uint256 executedAt
+        uint256 acceptedAt
+    );
+
+    event ModeratorOfferDeclined(
+        uint256 indexed communityId,
+        address indexed candidate,
+        uint256 declinedAt
+    );
+
+    event ModeratorResigned(
+        uint256 indexed communityId,
+        address indexed moderator,
+        uint256 resignedAt
     );
 
     event RemoveModeratorProposalCreated(
@@ -505,6 +515,7 @@ contract DecentralizedForum {
             appointedModerators[communityId][msg.sender] = false;
         }
 
+        _resetRecommendations(communityId, msg.sender);
         _refreshActiveModerators(communityId);
 
         if (wasModerator && !_isModerator(communityId, msg.sender)) {
@@ -523,34 +534,21 @@ contract DecentralizedForum {
         );
     }
 
-    // Backward-compatible entry point: creates a proposal instead of directly appointing.
-    function addModerator(uint256 communityId, address user)
+    // Any member can recommend a candidate; MODERATOR_RECOMMENDATIONS_REQUIRED
+    // distinct recommendations open an offer the candidate must accept before
+    // becoming a moderator. One vote per member per round.
+    function recommendModerator(uint256 communityId, address candidate)
         external
         communityMustExist(communityId)
-        onlyCommunityModerator(communityId)
-        returns (uint256)
-    {
-        return proposeModerator(communityId, user);
-    }
-
-    // Backward-compatible entry point: creates a removal proposal instead of directly removing.
-    function removeModerator(uint256 communityId, address user)
-        external
-        communityMustExist(communityId)
-        onlyCommunityModerator(communityId)
-        returns (uint256)
-    {
-        return proposeRemoveModerator(communityId, user);
-    }
-
-    function proposeModerator(uint256 communityId, address candidate)
-        public
-        communityMustExist(communityId)
-        onlyCommunityModerator(communityId)
-        returns (uint256)
+        onlyCommunityMember(communityId)
+        notBanned(communityId)
     {
         if (candidate == address(0)) {
             revert EmptyAddress();
+        }
+
+        if (candidate == msg.sender) {
+            revert CannotRecommendSelf();
         }
 
         if (isBanned[communityId][candidate]) {
@@ -565,63 +563,106 @@ contract DecentralizedForum {
             revert AlreadyModerator();
         }
 
-        uint256 proposalId = nextModeratorProposalId;
-        nextModeratorProposalId++;
+        if (pendingModeratorOffers[communityId][candidate]) {
+            revert ModeratorOfferAlreadyPending();
+        }
 
-        ModeratorProposal storage proposal = moderatorProposals[proposalId];
-        proposal.id = proposalId;
-        proposal.communityId = communityId;
-        proposal.candidate = candidate;
-        proposal.proposer = msg.sender;
-        proposal.approvals = 1;
-        proposal.exists = true;
+        bytes32 voteKey = _recommendationKey(communityId, candidate, msg.sender);
+        if (recommendedInRound[voteKey]) {
+            revert AlreadyRecommended();
+        }
 
-        moderatorProposalApprovedBy[proposalId][msg.sender] = true;
+        recommendedInRound[voteKey] = true;
+        recommendationCount[communityId][candidate]++;
+        uint256 votes = recommendationCount[communityId][candidate];
 
-        emit ModeratorProposalCreated(
-            proposalId,
+        emit ModeratorRecommended(
             communityId,
             candidate,
             msg.sender,
-            proposal.approvals,
+            votes,
             block.timestamp
         );
 
-        _tryExecuteModeratorProposal(proposalId);
-        return proposalId;
+        if (votes >= MODERATOR_RECOMMENDATIONS_REQUIRED) {
+            pendingModeratorOffers[communityId][candidate] = true;
+
+            emit ModeratorOfferCreated(
+                communityId,
+                candidate,
+                block.timestamp
+            );
+        }
     }
 
-    function approveModeratorProposal(uint256 proposalId) external returns (bool) {
-        ModeratorProposal storage proposal = moderatorProposals[proposalId];
-
-        if (!proposal.exists) {
-            revert ProposalDoesNotExist();
+    function acceptModeratorRole(uint256 communityId)
+        external
+        communityMustExist(communityId)
+        notBanned(communityId)
+    {
+        if (!pendingModeratorOffers[communityId][msg.sender]) {
+            revert NoPendingModeratorOffer();
         }
 
-        if (proposal.executed) {
-            revert ProposalAlreadyExecuted();
+        if (!isMember[communityId][msg.sender]) {
+            revert OnlyCommunityMembersAllowed();
         }
 
-        if (!_isModerator(proposal.communityId, msg.sender)) {
-            revert OnlyCommunityModeratorAllowed();
-        }
+        _resetRecommendations(communityId, msg.sender);
+        resignedModerators[communityId][msg.sender] = false;
+        appointedModerators[communityId][msg.sender] = true;
+        _trackModeratorCandidate(communityId, msg.sender);
 
-        if (moderatorProposalApprovedBy[proposalId][msg.sender]) {
-            revert ModeratorProposalAlreadyApproved();
-        }
+        emit ModeratorOfferAccepted(communityId, msg.sender, block.timestamp);
 
-        moderatorProposalApprovedBy[proposalId][msg.sender] = true;
-        proposal.approvals++;
-
-        emit ModeratorProposalApproved(
-            proposalId,
-            proposal.communityId,
+        emit ModeratorAdded(
+            communityId,
             msg.sender,
-            proposal.approvals,
+            msg.sender,
             block.timestamp
         );
+    }
 
-        return _tryExecuteModeratorProposal(proposalId);
+    function declineModeratorRole(uint256 communityId)
+        external
+        communityMustExist(communityId)
+    {
+        if (!pendingModeratorOffers[communityId][msg.sender]) {
+            revert NoPendingModeratorOffer();
+        }
+
+        _resetRecommendations(communityId, msg.sender);
+
+        emit ModeratorOfferDeclined(communityId, msg.sender, block.timestamp);
+    }
+
+    // Voluntary exit from the role. Costs only the transaction gas. Resigned
+    // users are also excluded from automatic activity-based moderation until
+    // they accept a new offer.
+    function resignModerator(uint256 communityId)
+        external
+        communityMustExist(communityId)
+    {
+        if (communities[communityId].creator == msg.sender) {
+            revert CannotRemoveCreatorModerator();
+        }
+
+        if (!_isModerator(communityId, msg.sender)) {
+            revert NotModerator();
+        }
+
+        appointedModerators[communityId][msg.sender] = false;
+        resignedModerators[communityId][msg.sender] = true;
+        _refreshActiveModerators(communityId);
+
+        emit ModeratorResigned(communityId, msg.sender, block.timestamp);
+
+        emit ModeratorRemoved(
+            communityId,
+            msg.sender,
+            msg.sender,
+            block.timestamp
+        );
     }
 
     function proposeRemoveModerator(uint256 communityId, address target)
@@ -658,6 +699,7 @@ contract DecentralizedForum {
         proposal.exists = true;
 
         removeModeratorProposalApprovedBy[proposalId][msg.sender] = true;
+        removalProposalIdsByCommunity[communityId].push(proposalId);
 
         emit RemoveModeratorProposalCreated(
             proposalId,
@@ -734,6 +776,7 @@ contract DecentralizedForum {
             appointedModerators[communityId][user] = false;
         }
 
+        _resetRecommendations(communityId, user);
         isBanned[communityId][user] = true;
         _refreshActiveModerators(communityId);
 
@@ -1051,6 +1094,7 @@ contract DecentralizedForum {
         }
 
         usernameExists[nameHash] = true;
+        usernameOwner[nameHash] = msg.sender;
         usernames[msg.sender] = username;
 
         emit UsernameRegistered(msg.sender, username, block.timestamp);
@@ -1074,8 +1118,11 @@ contract DecentralizedForum {
             revert UsernameAlreadyTaken();
         }
 
-        delete usernameExists[keccak256(bytes(oldUsername))];
+        bytes32 oldHash = keccak256(bytes(oldUsername));
+        delete usernameExists[oldHash];
+        delete usernameOwner[oldHash];
         usernameExists[newHash] = true;
+        usernameOwner[newHash] = msg.sender;
         usernames[msg.sender] = newUsername;
 
         emit UsernameChanged(msg.sender, oldUsername, newUsername, block.timestamp);
@@ -1340,6 +1387,18 @@ contract DecentralizedForum {
         }
     }
 
+    function _recommendationKey(uint256 communityId, address candidate, address voter) private view returns (bytes32) {
+        return keccak256(abi.encodePacked(communityId, candidate, recommendationRound[communityId][candidate], voter));
+    }
+
+    // Starts a fresh recommendation round: prior votes stop counting and the
+    // open offer (if any) is withdrawn.
+    function _resetRecommendations(uint256 communityId, address user) private {
+        recommendationRound[communityId][user]++;
+        recommendationCount[communityId][user] = 0;
+        pendingModeratorOffers[communityId][user] = false;
+    }
+
     function _refreshActiveModerators(uint256 communityId) private {
         address[2] memory previousTop = topActiveUsers[communityId];
         address first = address(0);
@@ -1358,6 +1417,7 @@ contract DecentralizedForum {
                 user == creator ||
                 !isMember[communityId][user] ||
                 isBanned[communityId][user] ||
+                resignedModerators[communityId][user] ||
                 score == 0
             ) {
                 continue;
@@ -1401,40 +1461,7 @@ contract DecentralizedForum {
         return
             creatorModerators[communityId][user] ||
             appointedModerators[communityId][user] ||
-            _isActiveModerator(communityId, user);
-    }
-
-    function _tryExecuteModeratorProposal(uint256 proposalId) private returns (bool) {
-        ModeratorProposal storage proposal = moderatorProposals[proposalId];
-
-        if (
-            proposal.executed ||
-            proposal.approvals < ADD_MODERATOR_APPROVALS_REQUIRED ||
-            !isMember[proposal.communityId][proposal.candidate] ||
-            isBanned[proposal.communityId][proposal.candidate]
-        ) {
-            return false;
-        }
-
-        proposal.executed = true;
-        appointedModerators[proposal.communityId][proposal.candidate] = true;
-        _trackModeratorCandidate(proposal.communityId, proposal.candidate);
-
-        emit ModeratorAdded(
-            proposal.communityId,
-            proposal.candidate,
-            msg.sender,
-            block.timestamp
-        );
-
-        emit ModeratorProposalExecuted(
-            proposalId,
-            proposal.communityId,
-            proposal.candidate,
-            block.timestamp
-        );
-
-        return true;
+            (!resignedModerators[communityId][user] && _isActiveModerator(communityId, user));
     }
 
     function _tryExecuteRemoveModeratorProposal(uint256 proposalId) private returns (bool) {
@@ -1451,6 +1478,7 @@ contract DecentralizedForum {
 
         proposal.executed = true;
         appointedModerators[proposal.communityId][proposal.target] = false;
+        _resetRecommendations(proposal.communityId, proposal.target);
 
         emit ModeratorRemoved(
             proposal.communityId,
@@ -1680,29 +1708,42 @@ contract DecentralizedForum {
         return (moderatorCount + 1) / 2;
     }
 
-    function getModeratorProposal(uint256 proposalId)
+    function getModeratorRecommendationStatus(uint256 communityId, address candidate)
         external
         view
-        returns (
-            uint256 id,
-            uint256 communityId,
-            address candidate,
-            address proposer,
-            uint256 approvals,
-            bool executed,
-            bool exists
-        )
+        communityMustExist(communityId)
+        returns (uint256 recommendations, uint256 required, bool offerPending)
     {
-        ModeratorProposal memory proposal = moderatorProposals[proposalId];
         return (
-            proposal.id,
-            proposal.communityId,
-            proposal.candidate,
-            proposal.proposer,
-            proposal.approvals,
-            proposal.executed,
-            proposal.exists
+            recommendationCount[communityId][candidate],
+            MODERATOR_RECOMMENDATIONS_REQUIRED,
+            pendingModeratorOffers[communityId][candidate]
         );
+    }
+
+    function hasRecommendedModerator(uint256 communityId, address candidate, address user)
+        external
+        view
+        returns (bool)
+    {
+        return recommendedInRound[_recommendationKey(communityId, candidate, user)];
+    }
+
+    function hasPendingModeratorOffer(uint256 communityId, address user)
+        external
+        view
+        returns (bool)
+    {
+        return pendingModeratorOffers[communityId][user];
+    }
+
+    function getRemovalProposalsByCommunity(uint256 communityId)
+        external
+        view
+        communityMustExist(communityId)
+        returns (uint256[] memory)
+    {
+        return removalProposalIdsByCommunity[communityId];
     }
 
     function getRemoveModeratorProposal(uint256 proposalId)
@@ -1728,10 +1769,6 @@ contract DecentralizedForum {
             proposal.executed,
             proposal.exists
         );
-    }
-
-    function hasApprovedModeratorProposal(uint256 proposalId, address user) external view returns (bool) {
-        return moderatorProposalApprovedBy[proposalId][user];
     }
 
     function hasApprovedRemoveModeratorProposal(uint256 proposalId, address user) external view returns (bool) {
@@ -1835,6 +1872,10 @@ contract DecentralizedForum {
 
     function getUsername(address user) external view returns (string memory) {
         return usernames[user];
+    }
+
+    function getAddressByUsername(string calldata username) external view returns (address) {
+        return usernameOwner[keccak256(bytes(username))];
     }
 
     function isUsernameAvailable(string calldata username) external view returns (bool) {
