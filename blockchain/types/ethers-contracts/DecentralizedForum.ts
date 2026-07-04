@@ -6,22 +6,29 @@ import type { TypedContractEvent, TypedDeferredTopicFilter, TypedEventLog, Typed
   
 
   export interface DecentralizedForumInterface extends Interface {
-    getFunction(nameOrSignature: "ADD_MODERATOR_APPROVALS_REQUIRED" | "POST_ACTIVITY_POINTS" | "activityScore" | "addModerator" | "approveModeratorProposal" | "approveRemoveModeratorProposal" | "banUser" | "batchCreatePosts" | "communityOfPost" | "createCommunity" | "createPost" | "createSubCommunity" | "getAllCommunityIds" | "getCommentsMerkleRoot" | "getCommunity" | "getCommunityCount" | "getCommunityV2" | "getKnownUsersByCommunity" | "getModeratorAddresses" | "getModeratorCount" | "getModeratorProposal" | "getModeratorRole" | "getPost" | "getPostCount" | "getPostsByCommunity" | "getRemoveModeratorProposal" | "getRequiredRemovalApprovals" | "getSubCommunities" | "getTopActiveUsers" | "getUserJoinedAt" | "hasApprovedModeratorProposal" | "hasApprovedRemoveModeratorProposal" | "hidePost" | "isBanned" | "isMember" | "isPostHidden" | "isUserBannedFromCommunity" | "isUserMemberOfCommunity" | "isUserModeratorOfCommunity" | "joinCommunity" | "joinedAt" | "leaveCommunity" | "proposeModerator" | "proposeRemoveModerator" | "removeModerator" | "restorePost" | "unbanUser" | "updateCommentsMerkleRoot" | "updateCommunityMetadata" | "userCommunityCount" | "userPostCount"): FunctionFragment;
+    getFunction(nameOrSignature: "ADD_MODERATOR_APPROVALS_REQUIRED" | "POST_ACTIVITY_POINTS" | "USERNAME_CHANGE_FEE" | "USERNAME_MAX_LENGTH" | "USERNAME_MIN_LENGTH" | "activityScore" | "addModerator" | "approveModeratorProposal" | "approvePendingComment" | "approvePendingPost" | "approveRemoveModeratorProposal" | "banUser" | "batchCreatePosts" | "changeUsername" | "communityOfPost" | "createCommunity" | "createFlaggedPost" | "createPost" | "createSubCommunity" | "getAllCommunityIds" | "getCommentsMerkleRoot" | "getCommunity" | "getCommunityCount" | "getCommunityV2" | "getKnownUsersByCommunity" | "getModeratorAddresses" | "getModeratorCount" | "getModeratorProposal" | "getModeratorRole" | "getPendingComment" | "getPendingCommentsByPost" | "getPost" | "getPostCount" | "getPostsByCommunity" | "getRemoveModeratorProposal" | "getRequiredRemovalApprovals" | "getSubCommunities" | "getTopActiveUsers" | "getUserJoinedAt" | "getUsername" | "hasApprovedModeratorProposal" | "hasApprovedRemoveModeratorProposal" | "hidePost" | "isBanned" | "isMember" | "isPostHidden" | "isUserBannedFromCommunity" | "isUserMemberOfCommunity" | "isUserModeratorOfCommunity" | "isUsernameAvailable" | "joinCommunity" | "joinedAt" | "leaveCommunity" | "postPendingReview" | "postRejected" | "postScore" | "postVotes" | "proposeModerator" | "proposeRemoveModerator" | "registerUsername" | "rejectPendingComment" | "rejectPendingPost" | "removeModerator" | "restorePost" | "submitFlaggedComment" | "unbanUser" | "updateCommentsMerkleRoot" | "updateCommunityMetadata" | "userCommunityCount" | "userPostCount" | "votePost"): FunctionFragment;
 
-    getEvent(nameOrSignatureOrTopic: "ActiveModeratorsUpdated" | "CommentsMerkleRootUpdated" | "CommunityCreated" | "CommunityJoined" | "CommunityLeft" | "CommunityMetadataUpdated" | "ModeratorAdded" | "ModeratorProposalApproved" | "ModeratorProposalCreated" | "ModeratorProposalExecuted" | "ModeratorRemoved" | "PostCreated" | "PostHidden" | "PostRestored" | "RemoveModeratorProposalApproved" | "RemoveModeratorProposalCreated" | "RemoveModeratorProposalExecuted" | "SubCommunityCreated" | "UserBanned" | "UserUnbanned"): EventFragment;
+    getEvent(nameOrSignatureOrTopic: "ActiveModeratorsUpdated" | "CommentSubmittedForReview" | "CommentsMerkleRootUpdated" | "CommunityCreated" | "CommunityJoined" | "CommunityLeft" | "CommunityMetadataUpdated" | "ModeratorAdded" | "ModeratorProposalApproved" | "ModeratorProposalCreated" | "ModeratorProposalExecuted" | "ModeratorRemoved" | "PendingCommentApproved" | "PendingCommentRejected" | "PendingPostApproved" | "PendingPostRejected" | "PostCreated" | "PostHidden" | "PostRestored" | "PostSubmittedForReview" | "PostVoted" | "RemoveModeratorProposalApproved" | "RemoveModeratorProposalCreated" | "RemoveModeratorProposalExecuted" | "SubCommunityCreated" | "UserBanned" | "UserUnbanned" | "UsernameChanged" | "UsernameRegistered"): EventFragment;
 
     encodeFunctionData(functionFragment: 'ADD_MODERATOR_APPROVALS_REQUIRED', values?: undefined): string;
 encodeFunctionData(functionFragment: 'POST_ACTIVITY_POINTS', values?: undefined): string;
+encodeFunctionData(functionFragment: 'USERNAME_CHANGE_FEE', values?: undefined): string;
+encodeFunctionData(functionFragment: 'USERNAME_MAX_LENGTH', values?: undefined): string;
+encodeFunctionData(functionFragment: 'USERNAME_MIN_LENGTH', values?: undefined): string;
 encodeFunctionData(functionFragment: 'activityScore', values: [BigNumberish, AddressLike]): string;
 encodeFunctionData(functionFragment: 'addModerator', values: [BigNumberish, AddressLike]): string;
 encodeFunctionData(functionFragment: 'approveModeratorProposal', values: [BigNumberish]): string;
+encodeFunctionData(functionFragment: 'approvePendingComment', values: [BigNumberish]): string;
+encodeFunctionData(functionFragment: 'approvePendingPost', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'approveRemoveModeratorProposal', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'banUser', values: [BigNumberish, AddressLike]): string;
-encodeFunctionData(functionFragment: 'batchCreatePosts', values: [BigNumberish, string[]]): string;
+encodeFunctionData(functionFragment: 'batchCreatePosts', values: [BigNumberish, string[], string[], string[]]): string;
+encodeFunctionData(functionFragment: 'changeUsername', values: [string]): string;
 encodeFunctionData(functionFragment: 'communityOfPost', values: [BigNumberish]): string;
-encodeFunctionData(functionFragment: 'createCommunity', values: [string, string]): string;
-encodeFunctionData(functionFragment: 'createPost', values: [BigNumberish, string]): string;
-encodeFunctionData(functionFragment: 'createSubCommunity', values: [BigNumberish, string, string]): string;
+encodeFunctionData(functionFragment: 'createCommunity', values: [string, string, string]): string;
+encodeFunctionData(functionFragment: 'createFlaggedPost', values: [BigNumberish, string, string, string]): string;
+encodeFunctionData(functionFragment: 'createPost', values: [BigNumberish, string, string, string]): string;
+encodeFunctionData(functionFragment: 'createSubCommunity', values: [BigNumberish, string, string, string]): string;
 encodeFunctionData(functionFragment: 'getAllCommunityIds', values?: undefined): string;
 encodeFunctionData(functionFragment: 'getCommentsMerkleRoot', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'getCommunity', values: [BigNumberish]): string;
@@ -32,6 +39,8 @@ encodeFunctionData(functionFragment: 'getModeratorAddresses', values: [BigNumber
 encodeFunctionData(functionFragment: 'getModeratorCount', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'getModeratorProposal', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'getModeratorRole', values: [BigNumberish, AddressLike]): string;
+encodeFunctionData(functionFragment: 'getPendingComment', values: [BigNumberish]): string;
+encodeFunctionData(functionFragment: 'getPendingCommentsByPost', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'getPost', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'getPostCount', values?: undefined): string;
 encodeFunctionData(functionFragment: 'getPostsByCommunity', values: [BigNumberish]): string;
@@ -40,6 +49,7 @@ encodeFunctionData(functionFragment: 'getRequiredRemovalApprovals', values: [Big
 encodeFunctionData(functionFragment: 'getSubCommunities', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'getTopActiveUsers', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'getUserJoinedAt', values: [BigNumberish, AddressLike]): string;
+encodeFunctionData(functionFragment: 'getUsername', values: [AddressLike]): string;
 encodeFunctionData(functionFragment: 'hasApprovedModeratorProposal', values: [BigNumberish, AddressLike]): string;
 encodeFunctionData(functionFragment: 'hasApprovedRemoveModeratorProposal', values: [BigNumberish, AddressLike]): string;
 encodeFunctionData(functionFragment: 'hidePost', values: [BigNumberish]): string;
@@ -49,29 +59,46 @@ encodeFunctionData(functionFragment: 'isPostHidden', values: [BigNumberish]): st
 encodeFunctionData(functionFragment: 'isUserBannedFromCommunity', values: [BigNumberish, AddressLike]): string;
 encodeFunctionData(functionFragment: 'isUserMemberOfCommunity', values: [BigNumberish, AddressLike]): string;
 encodeFunctionData(functionFragment: 'isUserModeratorOfCommunity', values: [BigNumberish, AddressLike]): string;
+encodeFunctionData(functionFragment: 'isUsernameAvailable', values: [string]): string;
 encodeFunctionData(functionFragment: 'joinCommunity', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'joinedAt', values: [BigNumberish, AddressLike]): string;
 encodeFunctionData(functionFragment: 'leaveCommunity', values: [BigNumberish]): string;
+encodeFunctionData(functionFragment: 'postPendingReview', values: [BigNumberish]): string;
+encodeFunctionData(functionFragment: 'postRejected', values: [BigNumberish]): string;
+encodeFunctionData(functionFragment: 'postScore', values: [BigNumberish]): string;
+encodeFunctionData(functionFragment: 'postVotes', values: [BigNumberish, AddressLike]): string;
 encodeFunctionData(functionFragment: 'proposeModerator', values: [BigNumberish, AddressLike]): string;
 encodeFunctionData(functionFragment: 'proposeRemoveModerator', values: [BigNumberish, AddressLike]): string;
+encodeFunctionData(functionFragment: 'registerUsername', values: [string]): string;
+encodeFunctionData(functionFragment: 'rejectPendingComment', values: [BigNumberish]): string;
+encodeFunctionData(functionFragment: 'rejectPendingPost', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'removeModerator', values: [BigNumberish, AddressLike]): string;
 encodeFunctionData(functionFragment: 'restorePost', values: [BigNumberish]): string;
+encodeFunctionData(functionFragment: 'submitFlaggedComment', values: [BigNumberish, string, string]): string;
 encodeFunctionData(functionFragment: 'unbanUser', values: [BigNumberish, AddressLike]): string;
 encodeFunctionData(functionFragment: 'updateCommentsMerkleRoot', values: [BigNumberish, BytesLike]): string;
 encodeFunctionData(functionFragment: 'updateCommunityMetadata', values: [BigNumberish, string]): string;
 encodeFunctionData(functionFragment: 'userCommunityCount', values: [AddressLike]): string;
 encodeFunctionData(functionFragment: 'userPostCount', values: [AddressLike]): string;
+encodeFunctionData(functionFragment: 'votePost', values: [BigNumberish, BigNumberish]): string;
 
     decodeFunctionResult(functionFragment: 'ADD_MODERATOR_APPROVALS_REQUIRED', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'POST_ACTIVITY_POINTS', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'USERNAME_CHANGE_FEE', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'USERNAME_MAX_LENGTH', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'USERNAME_MIN_LENGTH', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'activityScore', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'addModerator', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'approveModeratorProposal', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'approvePendingComment', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'approvePendingPost', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'approveRemoveModeratorProposal', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'banUser', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'batchCreatePosts', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'changeUsername', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'communityOfPost', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'createCommunity', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'createFlaggedPost', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'createPost', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'createSubCommunity', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'getAllCommunityIds', data: BytesLike): Result;
@@ -84,6 +111,8 @@ decodeFunctionResult(functionFragment: 'getModeratorAddresses', data: BytesLike)
 decodeFunctionResult(functionFragment: 'getModeratorCount', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'getModeratorProposal', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'getModeratorRole', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'getPendingComment', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'getPendingCommentsByPost', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'getPost', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'getPostCount', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'getPostsByCommunity', data: BytesLike): Result;
@@ -92,6 +121,7 @@ decodeFunctionResult(functionFragment: 'getRequiredRemovalApprovals', data: Byte
 decodeFunctionResult(functionFragment: 'getSubCommunities', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'getTopActiveUsers', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'getUserJoinedAt', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'getUsername', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'hasApprovedModeratorProposal', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'hasApprovedRemoveModeratorProposal', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'hidePost', data: BytesLike): Result;
@@ -101,18 +131,28 @@ decodeFunctionResult(functionFragment: 'isPostHidden', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'isUserBannedFromCommunity', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'isUserMemberOfCommunity', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'isUserModeratorOfCommunity', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'isUsernameAvailable', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'joinCommunity', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'joinedAt', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'leaveCommunity', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'postPendingReview', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'postRejected', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'postScore', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'postVotes', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'proposeModerator', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'proposeRemoveModerator', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'registerUsername', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'rejectPendingComment', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'rejectPendingPost', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'removeModerator', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'restorePost', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'submitFlaggedComment', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'unbanUser', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'updateCommentsMerkleRoot', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'updateCommunityMetadata', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'userCommunityCount', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'votePost', data: BytesLike): Result;
   }
 
   
@@ -120,6 +160,18 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
       export type InputTuple = [communityId: BigNumberish, firstActiveModerator: AddressLike, secondActiveModerator: AddressLike, updatedAt: BigNumberish];
       export type OutputTuple = [communityId: bigint, firstActiveModerator: string, secondActiveModerator: string, updatedAt: bigint];
       export interface OutputObject {communityId: bigint, firstActiveModerator: string, secondActiveModerator: string, updatedAt: bigint };
+      export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
+      export type Filter = TypedDeferredTopicFilter<Event>
+      export type Log = TypedEventLog<Event>
+      export type LogDescription = TypedLogDescription<Event>
+    }
+
+  
+
+    export namespace CommentSubmittedForReviewEvent {
+      export type InputTuple = [commentId: BigNumberish, postId: BigNumberish, communityId: BigNumberish, author: AddressLike, content: string, imageCid: string, submittedAt: BigNumberish];
+      export type OutputTuple = [commentId: bigint, postId: bigint, communityId: bigint, author: string, content: string, imageCid: string, submittedAt: bigint];
+      export interface OutputObject {commentId: bigint, postId: bigint, communityId: bigint, author: string, content: string, imageCid: string, submittedAt: bigint };
       export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
       export type Filter = TypedDeferredTopicFilter<Event>
       export type Log = TypedEventLog<Event>
@@ -141,9 +193,9 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
   
 
     export namespace CommunityCreatedEvent {
-      export type InputTuple = [communityId: BigNumberish, creator: AddressLike, name: string, metadataCID: string, createdAt: BigNumberish];
-      export type OutputTuple = [communityId: bigint, creator: string, name: string, metadataCID: string, createdAt: bigint];
-      export interface OutputObject {communityId: bigint, creator: string, name: string, metadataCID: string, createdAt: bigint };
+      export type InputTuple = [communityId: BigNumberish, creator: AddressLike, name: string, metadataCID: string, description: string, createdAt: BigNumberish];
+      export type OutputTuple = [communityId: bigint, creator: string, name: string, metadataCID: string, description: string, createdAt: bigint];
+      export interface OutputObject {communityId: bigint, creator: string, name: string, metadataCID: string, description: string, createdAt: bigint };
       export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
       export type Filter = TypedDeferredTopicFilter<Event>
       export type Log = TypedEventLog<Event>
@@ -248,10 +300,58 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
 
   
 
+    export namespace PendingCommentApprovedEvent {
+      export type InputTuple = [commentId: BigNumberish, postId: BigNumberish, communityId: BigNumberish, moderator: AddressLike, approvedAt: BigNumberish];
+      export type OutputTuple = [commentId: bigint, postId: bigint, communityId: bigint, moderator: string, approvedAt: bigint];
+      export interface OutputObject {commentId: bigint, postId: bigint, communityId: bigint, moderator: string, approvedAt: bigint };
+      export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
+      export type Filter = TypedDeferredTopicFilter<Event>
+      export type Log = TypedEventLog<Event>
+      export type LogDescription = TypedLogDescription<Event>
+    }
+
+  
+
+    export namespace PendingCommentRejectedEvent {
+      export type InputTuple = [commentId: BigNumberish, postId: BigNumberish, communityId: BigNumberish, moderator: AddressLike, rejectedAt: BigNumberish];
+      export type OutputTuple = [commentId: bigint, postId: bigint, communityId: bigint, moderator: string, rejectedAt: bigint];
+      export interface OutputObject {commentId: bigint, postId: bigint, communityId: bigint, moderator: string, rejectedAt: bigint };
+      export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
+      export type Filter = TypedDeferredTopicFilter<Event>
+      export type Log = TypedEventLog<Event>
+      export type LogDescription = TypedLogDescription<Event>
+    }
+
+  
+
+    export namespace PendingPostApprovedEvent {
+      export type InputTuple = [postId: BigNumberish, communityId: BigNumberish, moderator: AddressLike, approvedAt: BigNumberish];
+      export type OutputTuple = [postId: bigint, communityId: bigint, moderator: string, approvedAt: bigint];
+      export interface OutputObject {postId: bigint, communityId: bigint, moderator: string, approvedAt: bigint };
+      export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
+      export type Filter = TypedDeferredTopicFilter<Event>
+      export type Log = TypedEventLog<Event>
+      export type LogDescription = TypedLogDescription<Event>
+    }
+
+  
+
+    export namespace PendingPostRejectedEvent {
+      export type InputTuple = [postId: BigNumberish, communityId: BigNumberish, moderator: AddressLike, rejectedAt: BigNumberish];
+      export type OutputTuple = [postId: bigint, communityId: bigint, moderator: string, rejectedAt: bigint];
+      export interface OutputObject {postId: bigint, communityId: bigint, moderator: string, rejectedAt: bigint };
+      export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
+      export type Filter = TypedDeferredTopicFilter<Event>
+      export type Log = TypedEventLog<Event>
+      export type LogDescription = TypedLogDescription<Event>
+    }
+
+  
+
     export namespace PostCreatedEvent {
-      export type InputTuple = [postId: BigNumberish, communityId: BigNumberish, author: AddressLike, contentCID: string, createdAt: BigNumberish];
-      export type OutputTuple = [postId: bigint, communityId: bigint, author: string, contentCID: string, createdAt: bigint];
-      export interface OutputObject {postId: bigint, communityId: bigint, author: string, contentCID: string, createdAt: bigint };
+      export type InputTuple = [postId: BigNumberish, communityId: BigNumberish, author: AddressLike, contentCID: string, title: string, tags: string, createdAt: BigNumberish];
+      export type OutputTuple = [postId: bigint, communityId: bigint, author: string, contentCID: string, title: string, tags: string, createdAt: bigint];
+      export interface OutputObject {postId: bigint, communityId: bigint, author: string, contentCID: string, title: string, tags: string, createdAt: bigint };
       export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
       export type Filter = TypedDeferredTopicFilter<Event>
       export type Log = TypedEventLog<Event>
@@ -276,6 +376,30 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
       export type InputTuple = [postId: BigNumberish, communityId: BigNumberish, restoredBy: AddressLike, restoredAt: BigNumberish];
       export type OutputTuple = [postId: bigint, communityId: bigint, restoredBy: string, restoredAt: bigint];
       export interface OutputObject {postId: bigint, communityId: bigint, restoredBy: string, restoredAt: bigint };
+      export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
+      export type Filter = TypedDeferredTopicFilter<Event>
+      export type Log = TypedEventLog<Event>
+      export type LogDescription = TypedLogDescription<Event>
+    }
+
+  
+
+    export namespace PostSubmittedForReviewEvent {
+      export type InputTuple = [postId: BigNumberish, communityId: BigNumberish, author: AddressLike, title: string, submittedAt: BigNumberish];
+      export type OutputTuple = [postId: bigint, communityId: bigint, author: string, title: string, submittedAt: bigint];
+      export interface OutputObject {postId: bigint, communityId: bigint, author: string, title: string, submittedAt: bigint };
+      export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
+      export type Filter = TypedDeferredTopicFilter<Event>
+      export type Log = TypedEventLog<Event>
+      export type LogDescription = TypedLogDescription<Event>
+    }
+
+  
+
+    export namespace PostVotedEvent {
+      export type InputTuple = [postId: BigNumberish, communityId: BigNumberish, voter: AddressLike, vote: BigNumberish, newScore: BigNumberish, votedAt: BigNumberish];
+      export type OutputTuple = [postId: bigint, communityId: bigint, voter: string, vote: bigint, newScore: bigint, votedAt: bigint];
+      export interface OutputObject {postId: bigint, communityId: bigint, voter: string, vote: bigint, newScore: bigint, votedAt: bigint };
       export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
       export type Filter = TypedDeferredTopicFilter<Event>
       export type Log = TypedEventLog<Event>
@@ -321,9 +445,9 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
   
 
     export namespace SubCommunityCreatedEvent {
-      export type InputTuple = [communityId: BigNumberish, parentCommunityId: BigNumberish, creator: AddressLike, name: string, metadataCID: string, createdAt: BigNumberish];
-      export type OutputTuple = [communityId: bigint, parentCommunityId: bigint, creator: string, name: string, metadataCID: string, createdAt: bigint];
-      export interface OutputObject {communityId: bigint, parentCommunityId: bigint, creator: string, name: string, metadataCID: string, createdAt: bigint };
+      export type InputTuple = [communityId: BigNumberish, parentCommunityId: BigNumberish, creator: AddressLike, name: string, metadataCID: string, description: string, createdAt: BigNumberish];
+      export type OutputTuple = [communityId: bigint, parentCommunityId: bigint, creator: string, name: string, metadataCID: string, description: string, createdAt: bigint];
+      export interface OutputObject {communityId: bigint, parentCommunityId: bigint, creator: string, name: string, metadataCID: string, description: string, createdAt: bigint };
       export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
       export type Filter = TypedDeferredTopicFilter<Event>
       export type Log = TypedEventLog<Event>
@@ -348,6 +472,30 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
       export type InputTuple = [communityId: BigNumberish, user: AddressLike, unbannedBy: AddressLike, unbannedAt: BigNumberish];
       export type OutputTuple = [communityId: bigint, user: string, unbannedBy: string, unbannedAt: bigint];
       export interface OutputObject {communityId: bigint, user: string, unbannedBy: string, unbannedAt: bigint };
+      export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
+      export type Filter = TypedDeferredTopicFilter<Event>
+      export type Log = TypedEventLog<Event>
+      export type LogDescription = TypedLogDescription<Event>
+    }
+
+  
+
+    export namespace UsernameChangedEvent {
+      export type InputTuple = [user: AddressLike, oldUsername: string, newUsername: string, changedAt: BigNumberish];
+      export type OutputTuple = [user: string, oldUsername: string, newUsername: string, changedAt: bigint];
+      export interface OutputObject {user: string, oldUsername: string, newUsername: string, changedAt: bigint };
+      export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
+      export type Filter = TypedDeferredTopicFilter<Event>
+      export type Log = TypedEventLog<Event>
+      export type LogDescription = TypedLogDescription<Event>
+    }
+
+  
+
+    export namespace UsernameRegisteredEvent {
+      export type InputTuple = [user: AddressLike, username: string, registeredAt: BigNumberish];
+      export type OutputTuple = [user: string, username: string, registeredAt: bigint];
+      export interface OutputObject {user: string, username: string, registeredAt: bigint };
       export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
       export type Filter = TypedDeferredTopicFilter<Event>
       export type Log = TypedEventLog<Event>
@@ -406,6 +554,30 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
     
 
     
+    USERNAME_CHANGE_FEE: TypedContractMethod<
+      [],
+      [bigint],
+      'view'
+    >
+    
+
+    
+    USERNAME_MAX_LENGTH: TypedContractMethod<
+      [],
+      [bigint],
+      'view'
+    >
+    
+
+    
+    USERNAME_MIN_LENGTH: TypedContractMethod<
+      [],
+      [bigint],
+      'view'
+    >
+    
+
+    
     activityScore: TypedContractMethod<
       [arg0: BigNumberish, arg1: AddressLike, ],
       [bigint],
@@ -430,6 +602,22 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
     
 
     
+    approvePendingComment: TypedContractMethod<
+      [commentId: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >
+    
+
+    
+    approvePendingPost: TypedContractMethod<
+      [postId: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >
+    
+
+    
     approveRemoveModeratorProposal: TypedContractMethod<
       [proposalId: BigNumberish, ],
       [boolean],
@@ -447,9 +635,17 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
 
     
     batchCreatePosts: TypedContractMethod<
-      [communityId: BigNumberish, contentCIDs: string[], ],
+      [communityId: BigNumberish, contentCIDs: string[], titles: string[], tagsList: string[], ],
       [void],
       'nonpayable'
+    >
+    
+
+    
+    changeUsername: TypedContractMethod<
+      [newUsername: string, ],
+      [void],
+      'payable'
     >
     
 
@@ -463,7 +659,15 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
 
     
     createCommunity: TypedContractMethod<
-      [name: string, metadataCID: string, ],
+      [name: string, metadataCID: string, description: string, ],
+      [void],
+      'nonpayable'
+    >
+    
+
+    
+    createFlaggedPost: TypedContractMethod<
+      [communityId: BigNumberish, contentCID: string, title: string, tags: string, ],
       [void],
       'nonpayable'
     >
@@ -471,7 +675,7 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
 
     
     createPost: TypedContractMethod<
-      [communityId: BigNumberish, contentCID: string, ],
+      [communityId: BigNumberish, contentCID: string, title: string, tags: string, ],
       [void],
       'nonpayable'
     >
@@ -479,7 +683,7 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
 
     
     createSubCommunity: TypedContractMethod<
-      [parentCommunityId: BigNumberish, name: string, metadataCID: string, ],
+      [parentCommunityId: BigNumberish, name: string, metadataCID: string, description: string, ],
       [void],
       'nonpayable'
     >
@@ -566,6 +770,22 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
     
 
     
+    getPendingComment: TypedContractMethod<
+      [commentId: BigNumberish, ],
+      [[bigint, bigint, string, string, string, bigint, bigint] & {id: bigint, postId: bigint, author: string, content: string, imageCid: string, createdAt: bigint, status: bigint }],
+      'view'
+    >
+    
+
+    
+    getPendingCommentsByPost: TypedContractMethod<
+      [postId: BigNumberish, ],
+      [bigint[]],
+      'view'
+    >
+    
+
+    
     getPost: TypedContractMethod<
       [postId: BigNumberish, ],
       [[bigint, bigint, string, string, bigint, boolean, boolean] & {id: bigint, communityId: bigint, author: string, contentCID: string, createdAt: bigint, exists: boolean, hidden: boolean }],
@@ -625,6 +845,14 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
     getUserJoinedAt: TypedContractMethod<
       [communityId: BigNumberish, user: AddressLike, ],
       [bigint],
+      'view'
+    >
+    
+
+    
+    getUsername: TypedContractMethod<
+      [user: AddressLike, ],
+      [string],
       'view'
     >
     
@@ -702,6 +930,14 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
     
 
     
+    isUsernameAvailable: TypedContractMethod<
+      [username: string, ],
+      [boolean],
+      'view'
+    >
+    
+
+    
     joinCommunity: TypedContractMethod<
       [communityId: BigNumberish, ],
       [void],
@@ -726,6 +962,38 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
     
 
     
+    postPendingReview: TypedContractMethod<
+      [arg0: BigNumberish, ],
+      [boolean],
+      'view'
+    >
+    
+
+    
+    postRejected: TypedContractMethod<
+      [arg0: BigNumberish, ],
+      [boolean],
+      'view'
+    >
+    
+
+    
+    postScore: TypedContractMethod<
+      [arg0: BigNumberish, ],
+      [bigint],
+      'view'
+    >
+    
+
+    
+    postVotes: TypedContractMethod<
+      [arg0: BigNumberish, arg1: AddressLike, ],
+      [bigint],
+      'view'
+    >
+    
+
+    
     proposeModerator: TypedContractMethod<
       [communityId: BigNumberish, candidate: AddressLike, ],
       [bigint],
@@ -742,6 +1010,30 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
     
 
     
+    registerUsername: TypedContractMethod<
+      [username: string, ],
+      [void],
+      'nonpayable'
+    >
+    
+
+    
+    rejectPendingComment: TypedContractMethod<
+      [commentId: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >
+    
+
+    
+    rejectPendingPost: TypedContractMethod<
+      [postId: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >
+    
+
+    
     removeModerator: TypedContractMethod<
       [communityId: BigNumberish, user: AddressLike, ],
       [bigint],
@@ -752,6 +1044,14 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
     
     restorePost: TypedContractMethod<
       [postId: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >
+    
+
+    
+    submitFlaggedComment: TypedContractMethod<
+      [postId: BigNumberish, content: string, imageCid: string, ],
       [void],
       'nonpayable'
     >
@@ -797,6 +1097,14 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
     >
     
 
+    
+    votePost: TypedContractMethod<
+      [postId: BigNumberish, vote: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >
+    
+
 
     getFunction<T extends ContractMethod = ContractMethod>(key: string | FunctionFragment): T;
 
@@ -806,6 +1114,21 @@ decodeFunctionResult(functionFragment: 'userPostCount', data: BytesLike): Result
       'view'
     >;
 getFunction(nameOrSignature: 'POST_ACTIVITY_POINTS'): TypedContractMethod<
+      [],
+      [bigint],
+      'view'
+    >;
+getFunction(nameOrSignature: 'USERNAME_CHANGE_FEE'): TypedContractMethod<
+      [],
+      [bigint],
+      'view'
+    >;
+getFunction(nameOrSignature: 'USERNAME_MAX_LENGTH'): TypedContractMethod<
+      [],
+      [bigint],
+      'view'
+    >;
+getFunction(nameOrSignature: 'USERNAME_MIN_LENGTH'): TypedContractMethod<
       [],
       [bigint],
       'view'
@@ -825,6 +1148,16 @@ getFunction(nameOrSignature: 'approveModeratorProposal'): TypedContractMethod<
       [boolean],
       'nonpayable'
     >;
+getFunction(nameOrSignature: 'approvePendingComment'): TypedContractMethod<
+      [commentId: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >;
+getFunction(nameOrSignature: 'approvePendingPost'): TypedContractMethod<
+      [postId: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >;
 getFunction(nameOrSignature: 'approveRemoveModeratorProposal'): TypedContractMethod<
       [proposalId: BigNumberish, ],
       [boolean],
@@ -836,9 +1169,14 @@ getFunction(nameOrSignature: 'banUser'): TypedContractMethod<
       'nonpayable'
     >;
 getFunction(nameOrSignature: 'batchCreatePosts'): TypedContractMethod<
-      [communityId: BigNumberish, contentCIDs: string[], ],
+      [communityId: BigNumberish, contentCIDs: string[], titles: string[], tagsList: string[], ],
       [void],
       'nonpayable'
+    >;
+getFunction(nameOrSignature: 'changeUsername'): TypedContractMethod<
+      [newUsername: string, ],
+      [void],
+      'payable'
     >;
 getFunction(nameOrSignature: 'communityOfPost'): TypedContractMethod<
       [postId: BigNumberish, ],
@@ -846,17 +1184,22 @@ getFunction(nameOrSignature: 'communityOfPost'): TypedContractMethod<
       'view'
     >;
 getFunction(nameOrSignature: 'createCommunity'): TypedContractMethod<
-      [name: string, metadataCID: string, ],
+      [name: string, metadataCID: string, description: string, ],
+      [void],
+      'nonpayable'
+    >;
+getFunction(nameOrSignature: 'createFlaggedPost'): TypedContractMethod<
+      [communityId: BigNumberish, contentCID: string, title: string, tags: string, ],
       [void],
       'nonpayable'
     >;
 getFunction(nameOrSignature: 'createPost'): TypedContractMethod<
-      [communityId: BigNumberish, contentCID: string, ],
+      [communityId: BigNumberish, contentCID: string, title: string, tags: string, ],
       [void],
       'nonpayable'
     >;
 getFunction(nameOrSignature: 'createSubCommunity'): TypedContractMethod<
-      [parentCommunityId: BigNumberish, name: string, metadataCID: string, ],
+      [parentCommunityId: BigNumberish, name: string, metadataCID: string, description: string, ],
       [void],
       'nonpayable'
     >;
@@ -910,6 +1253,16 @@ getFunction(nameOrSignature: 'getModeratorRole'): TypedContractMethod<
       [[boolean, boolean, boolean, boolean] & {isModerator: boolean, isCreatorModerator: boolean, isActiveBasedModerator: boolean, isAppointedModerator: boolean }],
       'view'
     >;
+getFunction(nameOrSignature: 'getPendingComment'): TypedContractMethod<
+      [commentId: BigNumberish, ],
+      [[bigint, bigint, string, string, string, bigint, bigint] & {id: bigint, postId: bigint, author: string, content: string, imageCid: string, createdAt: bigint, status: bigint }],
+      'view'
+    >;
+getFunction(nameOrSignature: 'getPendingCommentsByPost'): TypedContractMethod<
+      [postId: BigNumberish, ],
+      [bigint[]],
+      'view'
+    >;
 getFunction(nameOrSignature: 'getPost'): TypedContractMethod<
       [postId: BigNumberish, ],
       [[bigint, bigint, string, string, bigint, boolean, boolean] & {id: bigint, communityId: bigint, author: string, contentCID: string, createdAt: bigint, exists: boolean, hidden: boolean }],
@@ -948,6 +1301,11 @@ getFunction(nameOrSignature: 'getTopActiveUsers'): TypedContractMethod<
 getFunction(nameOrSignature: 'getUserJoinedAt'): TypedContractMethod<
       [communityId: BigNumberish, user: AddressLike, ],
       [bigint],
+      'view'
+    >;
+getFunction(nameOrSignature: 'getUsername'): TypedContractMethod<
+      [user: AddressLike, ],
+      [string],
       'view'
     >;
 getFunction(nameOrSignature: 'hasApprovedModeratorProposal'): TypedContractMethod<
@@ -995,6 +1353,11 @@ getFunction(nameOrSignature: 'isUserModeratorOfCommunity'): TypedContractMethod<
       [boolean],
       'view'
     >;
+getFunction(nameOrSignature: 'isUsernameAvailable'): TypedContractMethod<
+      [username: string, ],
+      [boolean],
+      'view'
+    >;
 getFunction(nameOrSignature: 'joinCommunity'): TypedContractMethod<
       [communityId: BigNumberish, ],
       [void],
@@ -1010,6 +1373,26 @@ getFunction(nameOrSignature: 'leaveCommunity'): TypedContractMethod<
       [void],
       'nonpayable'
     >;
+getFunction(nameOrSignature: 'postPendingReview'): TypedContractMethod<
+      [arg0: BigNumberish, ],
+      [boolean],
+      'view'
+    >;
+getFunction(nameOrSignature: 'postRejected'): TypedContractMethod<
+      [arg0: BigNumberish, ],
+      [boolean],
+      'view'
+    >;
+getFunction(nameOrSignature: 'postScore'): TypedContractMethod<
+      [arg0: BigNumberish, ],
+      [bigint],
+      'view'
+    >;
+getFunction(nameOrSignature: 'postVotes'): TypedContractMethod<
+      [arg0: BigNumberish, arg1: AddressLike, ],
+      [bigint],
+      'view'
+    >;
 getFunction(nameOrSignature: 'proposeModerator'): TypedContractMethod<
       [communityId: BigNumberish, candidate: AddressLike, ],
       [bigint],
@@ -1020,6 +1403,21 @@ getFunction(nameOrSignature: 'proposeRemoveModerator'): TypedContractMethod<
       [bigint],
       'nonpayable'
     >;
+getFunction(nameOrSignature: 'registerUsername'): TypedContractMethod<
+      [username: string, ],
+      [void],
+      'nonpayable'
+    >;
+getFunction(nameOrSignature: 'rejectPendingComment'): TypedContractMethod<
+      [commentId: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >;
+getFunction(nameOrSignature: 'rejectPendingPost'): TypedContractMethod<
+      [postId: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >;
 getFunction(nameOrSignature: 'removeModerator'): TypedContractMethod<
       [communityId: BigNumberish, user: AddressLike, ],
       [bigint],
@@ -1027,6 +1425,11 @@ getFunction(nameOrSignature: 'removeModerator'): TypedContractMethod<
     >;
 getFunction(nameOrSignature: 'restorePost'): TypedContractMethod<
       [postId: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >;
+getFunction(nameOrSignature: 'submitFlaggedComment'): TypedContractMethod<
+      [postId: BigNumberish, content: string, imageCid: string, ],
       [void],
       'nonpayable'
     >;
@@ -1055,8 +1458,14 @@ getFunction(nameOrSignature: 'userPostCount'): TypedContractMethod<
       [bigint],
       'view'
     >;
+getFunction(nameOrSignature: 'votePost'): TypedContractMethod<
+      [postId: BigNumberish, vote: BigNumberish, ],
+      [void],
+      'nonpayable'
+    >;
 
     getEvent(key: 'ActiveModeratorsUpdated'): TypedContractEvent<ActiveModeratorsUpdatedEvent.InputTuple, ActiveModeratorsUpdatedEvent.OutputTuple, ActiveModeratorsUpdatedEvent.OutputObject>;
+getEvent(key: 'CommentSubmittedForReview'): TypedContractEvent<CommentSubmittedForReviewEvent.InputTuple, CommentSubmittedForReviewEvent.OutputTuple, CommentSubmittedForReviewEvent.OutputObject>;
 getEvent(key: 'CommentsMerkleRootUpdated'): TypedContractEvent<CommentsMerkleRootUpdatedEvent.InputTuple, CommentsMerkleRootUpdatedEvent.OutputTuple, CommentsMerkleRootUpdatedEvent.OutputObject>;
 getEvent(key: 'CommunityCreated'): TypedContractEvent<CommunityCreatedEvent.InputTuple, CommunityCreatedEvent.OutputTuple, CommunityCreatedEvent.OutputObject>;
 getEvent(key: 'CommunityJoined'): TypedContractEvent<CommunityJoinedEvent.InputTuple, CommunityJoinedEvent.OutputTuple, CommunityJoinedEvent.OutputObject>;
@@ -1067,15 +1476,23 @@ getEvent(key: 'ModeratorProposalApproved'): TypedContractEvent<ModeratorProposal
 getEvent(key: 'ModeratorProposalCreated'): TypedContractEvent<ModeratorProposalCreatedEvent.InputTuple, ModeratorProposalCreatedEvent.OutputTuple, ModeratorProposalCreatedEvent.OutputObject>;
 getEvent(key: 'ModeratorProposalExecuted'): TypedContractEvent<ModeratorProposalExecutedEvent.InputTuple, ModeratorProposalExecutedEvent.OutputTuple, ModeratorProposalExecutedEvent.OutputObject>;
 getEvent(key: 'ModeratorRemoved'): TypedContractEvent<ModeratorRemovedEvent.InputTuple, ModeratorRemovedEvent.OutputTuple, ModeratorRemovedEvent.OutputObject>;
+getEvent(key: 'PendingCommentApproved'): TypedContractEvent<PendingCommentApprovedEvent.InputTuple, PendingCommentApprovedEvent.OutputTuple, PendingCommentApprovedEvent.OutputObject>;
+getEvent(key: 'PendingCommentRejected'): TypedContractEvent<PendingCommentRejectedEvent.InputTuple, PendingCommentRejectedEvent.OutputTuple, PendingCommentRejectedEvent.OutputObject>;
+getEvent(key: 'PendingPostApproved'): TypedContractEvent<PendingPostApprovedEvent.InputTuple, PendingPostApprovedEvent.OutputTuple, PendingPostApprovedEvent.OutputObject>;
+getEvent(key: 'PendingPostRejected'): TypedContractEvent<PendingPostRejectedEvent.InputTuple, PendingPostRejectedEvent.OutputTuple, PendingPostRejectedEvent.OutputObject>;
 getEvent(key: 'PostCreated'): TypedContractEvent<PostCreatedEvent.InputTuple, PostCreatedEvent.OutputTuple, PostCreatedEvent.OutputObject>;
 getEvent(key: 'PostHidden'): TypedContractEvent<PostHiddenEvent.InputTuple, PostHiddenEvent.OutputTuple, PostHiddenEvent.OutputObject>;
 getEvent(key: 'PostRestored'): TypedContractEvent<PostRestoredEvent.InputTuple, PostRestoredEvent.OutputTuple, PostRestoredEvent.OutputObject>;
+getEvent(key: 'PostSubmittedForReview'): TypedContractEvent<PostSubmittedForReviewEvent.InputTuple, PostSubmittedForReviewEvent.OutputTuple, PostSubmittedForReviewEvent.OutputObject>;
+getEvent(key: 'PostVoted'): TypedContractEvent<PostVotedEvent.InputTuple, PostVotedEvent.OutputTuple, PostVotedEvent.OutputObject>;
 getEvent(key: 'RemoveModeratorProposalApproved'): TypedContractEvent<RemoveModeratorProposalApprovedEvent.InputTuple, RemoveModeratorProposalApprovedEvent.OutputTuple, RemoveModeratorProposalApprovedEvent.OutputObject>;
 getEvent(key: 'RemoveModeratorProposalCreated'): TypedContractEvent<RemoveModeratorProposalCreatedEvent.InputTuple, RemoveModeratorProposalCreatedEvent.OutputTuple, RemoveModeratorProposalCreatedEvent.OutputObject>;
 getEvent(key: 'RemoveModeratorProposalExecuted'): TypedContractEvent<RemoveModeratorProposalExecutedEvent.InputTuple, RemoveModeratorProposalExecutedEvent.OutputTuple, RemoveModeratorProposalExecutedEvent.OutputObject>;
 getEvent(key: 'SubCommunityCreated'): TypedContractEvent<SubCommunityCreatedEvent.InputTuple, SubCommunityCreatedEvent.OutputTuple, SubCommunityCreatedEvent.OutputObject>;
 getEvent(key: 'UserBanned'): TypedContractEvent<UserBannedEvent.InputTuple, UserBannedEvent.OutputTuple, UserBannedEvent.OutputObject>;
 getEvent(key: 'UserUnbanned'): TypedContractEvent<UserUnbannedEvent.InputTuple, UserUnbannedEvent.OutputTuple, UserUnbannedEvent.OutputObject>;
+getEvent(key: 'UsernameChanged'): TypedContractEvent<UsernameChangedEvent.InputTuple, UsernameChangedEvent.OutputTuple, UsernameChangedEvent.OutputObject>;
+getEvent(key: 'UsernameRegistered'): TypedContractEvent<UsernameRegisteredEvent.InputTuple, UsernameRegisteredEvent.OutputTuple, UsernameRegisteredEvent.OutputObject>;
 
     filters: {
       
@@ -1083,11 +1500,15 @@ getEvent(key: 'UserUnbanned'): TypedContractEvent<UserUnbannedEvent.InputTuple, 
       ActiveModeratorsUpdated: TypedContractEvent<ActiveModeratorsUpdatedEvent.InputTuple, ActiveModeratorsUpdatedEvent.OutputTuple, ActiveModeratorsUpdatedEvent.OutputObject>;
     
 
+      'CommentSubmittedForReview(uint256,uint256,uint256,address,string,string,uint256)': TypedContractEvent<CommentSubmittedForReviewEvent.InputTuple, CommentSubmittedForReviewEvent.OutputTuple, CommentSubmittedForReviewEvent.OutputObject>;
+      CommentSubmittedForReview: TypedContractEvent<CommentSubmittedForReviewEvent.InputTuple, CommentSubmittedForReviewEvent.OutputTuple, CommentSubmittedForReviewEvent.OutputObject>;
+    
+
       'CommentsMerkleRootUpdated(uint256,uint256,bytes32,address,uint256)': TypedContractEvent<CommentsMerkleRootUpdatedEvent.InputTuple, CommentsMerkleRootUpdatedEvent.OutputTuple, CommentsMerkleRootUpdatedEvent.OutputObject>;
       CommentsMerkleRootUpdated: TypedContractEvent<CommentsMerkleRootUpdatedEvent.InputTuple, CommentsMerkleRootUpdatedEvent.OutputTuple, CommentsMerkleRootUpdatedEvent.OutputObject>;
     
 
-      'CommunityCreated(uint256,address,string,string,uint256)': TypedContractEvent<CommunityCreatedEvent.InputTuple, CommunityCreatedEvent.OutputTuple, CommunityCreatedEvent.OutputObject>;
+      'CommunityCreated(uint256,address,string,string,string,uint256)': TypedContractEvent<CommunityCreatedEvent.InputTuple, CommunityCreatedEvent.OutputTuple, CommunityCreatedEvent.OutputObject>;
       CommunityCreated: TypedContractEvent<CommunityCreatedEvent.InputTuple, CommunityCreatedEvent.OutputTuple, CommunityCreatedEvent.OutputObject>;
     
 
@@ -1123,7 +1544,23 @@ getEvent(key: 'UserUnbanned'): TypedContractEvent<UserUnbannedEvent.InputTuple, 
       ModeratorRemoved: TypedContractEvent<ModeratorRemovedEvent.InputTuple, ModeratorRemovedEvent.OutputTuple, ModeratorRemovedEvent.OutputObject>;
     
 
-      'PostCreated(uint256,uint256,address,string,uint256)': TypedContractEvent<PostCreatedEvent.InputTuple, PostCreatedEvent.OutputTuple, PostCreatedEvent.OutputObject>;
+      'PendingCommentApproved(uint256,uint256,uint256,address,uint256)': TypedContractEvent<PendingCommentApprovedEvent.InputTuple, PendingCommentApprovedEvent.OutputTuple, PendingCommentApprovedEvent.OutputObject>;
+      PendingCommentApproved: TypedContractEvent<PendingCommentApprovedEvent.InputTuple, PendingCommentApprovedEvent.OutputTuple, PendingCommentApprovedEvent.OutputObject>;
+    
+
+      'PendingCommentRejected(uint256,uint256,uint256,address,uint256)': TypedContractEvent<PendingCommentRejectedEvent.InputTuple, PendingCommentRejectedEvent.OutputTuple, PendingCommentRejectedEvent.OutputObject>;
+      PendingCommentRejected: TypedContractEvent<PendingCommentRejectedEvent.InputTuple, PendingCommentRejectedEvent.OutputTuple, PendingCommentRejectedEvent.OutputObject>;
+    
+
+      'PendingPostApproved(uint256,uint256,address,uint256)': TypedContractEvent<PendingPostApprovedEvent.InputTuple, PendingPostApprovedEvent.OutputTuple, PendingPostApprovedEvent.OutputObject>;
+      PendingPostApproved: TypedContractEvent<PendingPostApprovedEvent.InputTuple, PendingPostApprovedEvent.OutputTuple, PendingPostApprovedEvent.OutputObject>;
+    
+
+      'PendingPostRejected(uint256,uint256,address,uint256)': TypedContractEvent<PendingPostRejectedEvent.InputTuple, PendingPostRejectedEvent.OutputTuple, PendingPostRejectedEvent.OutputObject>;
+      PendingPostRejected: TypedContractEvent<PendingPostRejectedEvent.InputTuple, PendingPostRejectedEvent.OutputTuple, PendingPostRejectedEvent.OutputObject>;
+    
+
+      'PostCreated(uint256,uint256,address,string,string,string,uint256)': TypedContractEvent<PostCreatedEvent.InputTuple, PostCreatedEvent.OutputTuple, PostCreatedEvent.OutputObject>;
       PostCreated: TypedContractEvent<PostCreatedEvent.InputTuple, PostCreatedEvent.OutputTuple, PostCreatedEvent.OutputObject>;
     
 
@@ -1133,6 +1570,14 @@ getEvent(key: 'UserUnbanned'): TypedContractEvent<UserUnbannedEvent.InputTuple, 
 
       'PostRestored(uint256,uint256,address,uint256)': TypedContractEvent<PostRestoredEvent.InputTuple, PostRestoredEvent.OutputTuple, PostRestoredEvent.OutputObject>;
       PostRestored: TypedContractEvent<PostRestoredEvent.InputTuple, PostRestoredEvent.OutputTuple, PostRestoredEvent.OutputObject>;
+    
+
+      'PostSubmittedForReview(uint256,uint256,address,string,uint256)': TypedContractEvent<PostSubmittedForReviewEvent.InputTuple, PostSubmittedForReviewEvent.OutputTuple, PostSubmittedForReviewEvent.OutputObject>;
+      PostSubmittedForReview: TypedContractEvent<PostSubmittedForReviewEvent.InputTuple, PostSubmittedForReviewEvent.OutputTuple, PostSubmittedForReviewEvent.OutputObject>;
+    
+
+      'PostVoted(uint256,uint256,address,int8,int256,uint256)': TypedContractEvent<PostVotedEvent.InputTuple, PostVotedEvent.OutputTuple, PostVotedEvent.OutputObject>;
+      PostVoted: TypedContractEvent<PostVotedEvent.InputTuple, PostVotedEvent.OutputTuple, PostVotedEvent.OutputObject>;
     
 
       'RemoveModeratorProposalApproved(uint256,uint256,address,uint256,uint256)': TypedContractEvent<RemoveModeratorProposalApprovedEvent.InputTuple, RemoveModeratorProposalApprovedEvent.OutputTuple, RemoveModeratorProposalApprovedEvent.OutputObject>;
@@ -1147,7 +1592,7 @@ getEvent(key: 'UserUnbanned'): TypedContractEvent<UserUnbannedEvent.InputTuple, 
       RemoveModeratorProposalExecuted: TypedContractEvent<RemoveModeratorProposalExecutedEvent.InputTuple, RemoveModeratorProposalExecutedEvent.OutputTuple, RemoveModeratorProposalExecutedEvent.OutputObject>;
     
 
-      'SubCommunityCreated(uint256,uint256,address,string,string,uint256)': TypedContractEvent<SubCommunityCreatedEvent.InputTuple, SubCommunityCreatedEvent.OutputTuple, SubCommunityCreatedEvent.OutputObject>;
+      'SubCommunityCreated(uint256,uint256,address,string,string,string,uint256)': TypedContractEvent<SubCommunityCreatedEvent.InputTuple, SubCommunityCreatedEvent.OutputTuple, SubCommunityCreatedEvent.OutputObject>;
       SubCommunityCreated: TypedContractEvent<SubCommunityCreatedEvent.InputTuple, SubCommunityCreatedEvent.OutputTuple, SubCommunityCreatedEvent.OutputObject>;
     
 
@@ -1157,6 +1602,14 @@ getEvent(key: 'UserUnbanned'): TypedContractEvent<UserUnbannedEvent.InputTuple, 
 
       'UserUnbanned(uint256,address,address,uint256)': TypedContractEvent<UserUnbannedEvent.InputTuple, UserUnbannedEvent.OutputTuple, UserUnbannedEvent.OutputObject>;
       UserUnbanned: TypedContractEvent<UserUnbannedEvent.InputTuple, UserUnbannedEvent.OutputTuple, UserUnbannedEvent.OutputObject>;
+    
+
+      'UsernameChanged(address,string,string,uint256)': TypedContractEvent<UsernameChangedEvent.InputTuple, UsernameChangedEvent.OutputTuple, UsernameChangedEvent.OutputObject>;
+      UsernameChanged: TypedContractEvent<UsernameChangedEvent.InputTuple, UsernameChangedEvent.OutputTuple, UsernameChangedEvent.OutputObject>;
+    
+
+      'UsernameRegistered(address,string,uint256)': TypedContractEvent<UsernameRegisteredEvent.InputTuple, UsernameRegisteredEvent.OutputTuple, UsernameRegisteredEvent.OutputObject>;
+      UsernameRegistered: TypedContractEvent<UsernameRegisteredEvent.InputTuple, UsernameRegisteredEvent.OutputTuple, UsernameRegisteredEvent.OutputObject>;
     
     };
   }

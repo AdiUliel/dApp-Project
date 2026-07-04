@@ -23,7 +23,7 @@ describe("DecentralizedForum", function () {
     it("should create a community, make creator a member, and make creator moderator", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
 
       expect(await forum.getCommunityCount()).to.equal(1n);
       expect(await forum.userCommunityCount(owner.address)).to.equal(1n);
@@ -49,7 +49,7 @@ describe("DecentralizedForum", function () {
       const forum = await deployForum();
 
       await expect(
-        forum.createCommunity("", "cid-123")
+        forum.createCommunity("", "cid-123", "a community")
       ).to.be.revertedWithCustomError(forum, "EmptyCommunityName");
     });
 
@@ -57,24 +57,24 @@ describe("DecentralizedForum", function () {
       const forum = await deployForum();
 
       await expect(
-        forum.createCommunity("Solidity", "")
+        forum.createCommunity("Solidity", "", "a community")
       ).to.be.revertedWithCustomError(forum, "EmptyMetadataCID");
     });
 
     it("should not allow duplicate community name", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
 
       await expect(
-        forum.createCommunity("Solidity", "cid-456")
+        forum.createCommunity("Solidity", "cid-456", "a community")
       ).to.be.revertedWithCustomError(forum, "CommunityNameAlreadyExists");
     });
 
     it("should allow only creator to update community metadata", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.updateCommunityMetadata(1n, "cid-456");
 
       const community = await forum.getCommunity(1n);
@@ -90,7 +90,7 @@ describe("DecentralizedForum", function () {
     it("should allow another user to join a community", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
 
       expect(await forum.isUserMemberOfCommunity(1n, user1.address)).to.equal(true);
@@ -103,7 +103,7 @@ describe("DecentralizedForum", function () {
     it("should not allow a user to join twice", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
 
       await expect(
@@ -122,7 +122,7 @@ describe("DecentralizedForum", function () {
     it("should allow a regular member to leave but not the creator", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
       await forum.connect(user1).leaveCommunity(1n);
 
@@ -136,34 +136,35 @@ describe("DecentralizedForum", function () {
   });
 
   describe("moderators and bans", function () {
-    it("should allow creator to add and remove a moderator", async function () {
+    it("creates a moderator proposal instead of appointing directly (governance flow)", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
 
       await forum.addModerator(1n, user1.address);
-      expect(await forum.isUserModeratorOfCommunity(1n, user1.address)).to.equal(true);
 
-      await forum.removeModerator(1n, user1.address);
+      // A single approval is below ADD_MODERATOR_APPROVALS_REQUIRED, so the
+      // candidate is not a moderator yet - only a pending proposal exists.
       expect(await forum.isUserModeratorOfCommunity(1n, user1.address)).to.equal(false);
+      expect(await forum.hasApprovedModeratorProposal(1n, owner.address)).to.equal(true);
     });
 
-    it("should not allow non-creator to add a moderator", async function () {
+    it("should not allow a non-moderator to add a moderator", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
 
       await expect(
         forum.connect(user1).addModerator(1n, user1.address)
-      ).to.be.revertedWithCustomError(forum, "OnlyCommunityCreatorAllowed");
+      ).to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
     });
 
     it("should allow moderator to ban and unban users", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
 
       await forum.banUser(1n, user1.address);
@@ -182,7 +183,7 @@ describe("DecentralizedForum", function () {
     it("should not allow banning the community creator", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
 
       await expect(
         forum.banUser(1n, owner.address)
@@ -194,10 +195,10 @@ describe("DecentralizedForum", function () {
     it("should allow a member to create a post", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
 
-      await forum.connect(user1).createPost(1n, "post-cid-1");
+      await forum.connect(user1).createPost(1n, "post-cid-1", "a title", "tag1,tag2");
 
       expect(await forum.getPostCount()).to.equal(1n);
       expect(await forum.userPostCount(user1.address)).to.equal(1n);
@@ -218,10 +219,10 @@ describe("DecentralizedForum", function () {
     it("should not allow a non-member to create a post", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
 
       await expect(
-        forum.connect(user1).createPost(1n, "post-cid-1")
+        forum.connect(user1).createPost(1n, "post-cid-1", "a title", "tag1,tag2")
       ).to.be.revertedWithCustomError(forum, "OnlyCommunityMembersAllowed");
     });
 
@@ -229,25 +230,25 @@ describe("DecentralizedForum", function () {
       const forum = await deployForum();
 
       await expect(
-        forum.createPost(999n, "post-cid-1")
+        forum.createPost(999n, "post-cid-1", "a title", "tag1,tag2")
       ).to.be.revertedWithCustomError(forum, "CommunityDoesNotExist");
     });
 
     it("should not allow empty post CID", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
 
       await expect(
-        forum.createPost(1n, "")
+        forum.createPost(1n, "", "a title", "tag1,tag2")
       ).to.be.revertedWithCustomError(forum, "EmptyContentCID");
     });
 
     it("should allow batch post creation", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
-      await forum.batchCreatePosts(1n, ["post-cid-1", "post-cid-2", "post-cid-3"]);
+      await forum.createCommunity("Solidity", "cid-123", "a community");
+      await forum.batchCreatePosts(1n, ["post-cid-1", "post-cid-2", "post-cid-3"], ["t1", "t2", "t3"], ["", "", ""]);
 
       expect(await forum.getPostCount()).to.equal(3n);
       expect(await forum.userPostCount(owner.address)).to.equal(3n);
@@ -259,10 +260,10 @@ describe("DecentralizedForum", function () {
     it("should not allow empty batch", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
 
       await expect(
-        forum.batchCreatePosts(1n, [])
+        forum.batchCreatePosts(1n, [], [], [])
       ).to.be.revertedWithCustomError(forum, "EmptyPostBatch");
     });
   });
@@ -271,8 +272,8 @@ describe("DecentralizedForum", function () {
     it("should allow a moderator to hide and restore a post", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
-      await forum.createPost(1n, "post-cid-1");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
+      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
 
       await forum.hidePost(1n);
       expect(await forum.isPostHidden(1n)).to.equal(true);
@@ -287,9 +288,9 @@ describe("DecentralizedForum", function () {
     it("should not allow a non-moderator to hide a post", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
-      await forum.createPost(1n, "post-cid-1");
+      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
 
       await expect(
         forum.connect(user1).hidePost(1n)
@@ -301,8 +302,8 @@ describe("DecentralizedForum", function () {
     it("should not store comments on-chain and should allow moderator to update comments Merkle root", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
-      await forum.createPost(1n, "post-cid-1");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
+      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
 
       const root = ethers.keccak256(ethers.toUtf8Bytes("comments batch 1"));
       await forum.updateCommentsMerkleRoot(1n, root);
@@ -315,9 +316,9 @@ describe("DecentralizedForum", function () {
     it("should not allow a non-moderator to update comments Merkle root", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
-      await forum.createPost(1n, "post-cid-1");
+      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
 
       const root = ethers.keccak256(ethers.toUtf8Bytes("comments batch 1"));
 
@@ -329,8 +330,8 @@ describe("DecentralizedForum", function () {
     it("should not allow an empty comments Merkle root", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
-      await forum.createPost(1n, "post-cid-1");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
+      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
 
       await expect(
         forum.updateCommentsMerkleRoot(1n, ethers.ZeroHash)
@@ -342,8 +343,8 @@ describe("DecentralizedForum", function () {
     it("should return the correct community id for a post", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
-      await forum.createPost(1n, "post-cid-1");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
+      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
 
       const communityId = await forum.communityOfPost(1n);
       expect(communityId).to.equal(1n);
@@ -352,7 +353,7 @@ describe("DecentralizedForum", function () {
     it("should return false for a user who is not a member", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
 
       const isMember = await forum.isUserMemberOfCommunity(1n, user1.address);
       expect(isMember).to.equal(false);
@@ -361,10 +362,10 @@ describe("DecentralizedForum", function () {
     it("should keep correct counts across actions", async function () {
       const forum = await deployForum();
 
-      await forum.createCommunity("Solidity", "cid-123");
+      await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
-      await forum.createPost(1n, "post-cid-1");
-      await forum.batchCreatePosts(1n, ["post-cid-2", "post-cid-3"]);
+      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
+      await forum.batchCreatePosts(1n, ["post-cid-2", "post-cid-3"], ["t2", "t3"], ["", ""]);
 
       expect(await forum.getCommunityCount()).to.equal(1n);
       expect(await forum.getPostCount()).to.equal(3n);

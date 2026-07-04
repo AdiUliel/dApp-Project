@@ -1,0 +1,141 @@
+type User @entity(immutable: false) {
+  id: ID! # lowercase address
+  username: String
+  registeredAt: BigInt
+  postCount: Int!
+  communitiesJoined: Int!
+  totalGasUsed: BigInt!
+  totalFeesWei: BigInt!
+  posts: [Post!]! @derivedFrom(field: "author")
+  activities: [Activity!]! @derivedFrom(field: "user")
+  notifications: [Notification!]! @derivedFrom(field: "recipient")
+}
+
+type Community @entity(immutable: false) {
+  id: ID! # communityId
+  name: String!
+  description: String!
+  creator: User!
+  parent: Community
+  membersCount: BigInt!
+  createdAt: BigInt!
+  # Full moderator set (creator + appointed + the two active moderators),
+  # maintained so review notifications can fan out to everyone.
+  moderators: [String!]!
+  activeModerator1: String
+  activeModerator2: String
+  posts: [Post!]! @derivedFrom(field: "community")
+}
+
+type Post @entity(immutable: false) {
+  id: ID! # postId
+  community: Community!
+  author: User!
+  contentCID: String!
+  title: String!
+  tags: [String!]!
+  tagsText: String! # comma-joined copy used by fulltext search
+  score: BigInt!
+  upvotes: BigInt!
+  downvotes: BigInt!
+  hidden: Boolean!
+  pending: Boolean!
+  rejected: Boolean!
+  createdAt: BigInt!
+}
+
+type PendingComment @entity(immutable: false) {
+  id: ID! # on-chain pending comment id
+  post: Post!
+  community: Community!
+  author: User!
+  content: String!
+  imageCid: String!
+  status: Int! # 0 pending, 1 approved, 2 rejected
+  createdAt: BigInt!
+}
+
+type Vote @entity(immutable: false) {
+  id: ID! # postId-voterAddress
+  post: Post!
+  voter: User!
+  value: Int!
+  updatedAt: BigInt!
+}
+
+enum ActivityType {
+  COMMUNITY_CREATED
+  SUBCOMMUNITY_CREATED
+  COMMUNITY_JOINED
+  COMMUNITY_LEFT
+  POST_CREATED
+  POST_VOTED
+  POST_HIDDEN
+  POST_RESTORED
+  BECAME_MODERATOR
+  MODERATOR_REMOVED
+  USERNAME_REGISTERED
+  USERNAME_CHANGED
+  USER_BANNED
+  USER_UNBANNED
+  POST_REVIEWED
+  COMMENT_REVIEWED
+  COMMENT_SUBMITTED
+}
+
+type Activity @entity(immutable: true) {
+  id: ID! # txHash-logIndex
+  user: User!
+  type: ActivityType!
+  refId: BigInt
+  detail: String
+  gasUsed: BigInt!
+  feeWei: BigInt!
+  timestamp: BigInt!
+}
+
+enum NotificationType {
+  BECAME_MODERATOR
+  MODERATOR_REMOVED
+  POST_UPVOTED
+  POST_DOWNVOTED
+  POST_HIDDEN
+  BANNED
+  UNBANNED
+  POST_PENDING_REVIEW
+  COMMENT_PENDING_REVIEW
+  POST_APPROVED
+  POST_REJECTED
+  COMMENT_APPROVED
+  COMMENT_REJECTED
+}
+
+type Notification @entity(immutable: true) {
+  id: ID! # txHash-logIndex
+  recipient: User!
+  type: NotificationType!
+  actor: User
+  refId: BigInt
+  detail: String
+  timestamp: BigInt!
+}
+
+type _Schema_
+  @fulltext(
+    name: "postSearch"
+    language: en
+    algorithm: rank
+    include: [{ entity: "Post", fields: [{ name: "title" }, { name: "tagsText" }] }]
+  )
+  @fulltext(
+    name: "communitySearch"
+    language: en
+    algorithm: rank
+    include: [{ entity: "Community", fields: [{ name: "name" }, { name: "description" }] }]
+  )
+  @fulltext(
+    name: "userSearch"
+    language: en
+    algorithm: rank
+    include: [{ entity: "User", fields: [{ name: "username" }] }]
+  )

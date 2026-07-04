@@ -9,6 +9,9 @@ contract DecentralizedForum {
 
     uint256 public constant POST_ACTIVITY_POINTS = 5;
     uint256 public constant ADD_MODERATOR_APPROVALS_REQUIRED = 3;
+    uint256 public constant USERNAME_CHANGE_FEE = 0.05 ether;
+    uint256 public constant USERNAME_MIN_LENGTH = 3;
+    uint256 public constant USERNAME_MAX_LENGTH = 20;
 
     // STRUCTS //
     struct Community {
@@ -90,6 +93,30 @@ contract DecentralizedForum {
     mapping(uint256 => bytes32) private commentsMerkleRootByPost;
     mapping(uint256 => uint256) private commentsMerkleRootUpdatedAt;
 
+    mapping(address => string) private usernames;
+    mapping(bytes32 => bool) private usernameExists;
+
+    mapping(uint256 => mapping(address => int8)) public postVotes;
+    mapping(uint256 => int256) public postScore;
+
+    mapping(uint256 => bool) public postPendingReview;
+    mapping(uint256 => bool) public postRejected;
+
+    struct PendingComment {
+        uint256 id;
+        uint256 postId;
+        address author;
+        string content;
+        string imageCid;
+        uint256 createdAt;
+        uint8 status; // 0 = pending, 1 = approved, 2 = rejected
+        bool exists;
+    }
+
+    uint256 private nextPendingCommentId = 1;
+    mapping(uint256 => PendingComment) private pendingComments;
+    mapping(uint256 => uint256[]) private pendingCommentIdsByPost;
+
     // ERRORS //
     error CommunityDoesNotExist();
     error PostDoesNotExist();
@@ -117,6 +144,21 @@ contract DecentralizedForum {
     error ProposalAlreadyExecuted();
     error PostAlreadyHidden();
     error PostNotHidden();
+    error EmptyUsername();
+    error UsernameAlreadyTaken();
+    error UsernameAlreadySet();
+    error UsernameTooShort();
+    error UsernameTooLong();
+    error InvalidUsernameCharacter();
+    error ReservedUsername();
+    error NoUsernameSet();
+    error InsufficientUsernameChangeFee();
+    error InvalidVoteValue();
+    error InvalidCommunityName();
+    error PostNotPendingReview();
+    error CommentDoesNotExist();
+    error CommentNotPendingReview();
+    error EmptyCommentContent();
 
     // EVENTS //
     event CommunityCreated(
@@ -124,6 +166,7 @@ contract DecentralizedForum {
         address indexed creator,
         string name,
         string metadataCID,
+        string description,
         uint256 createdAt
     );
 
@@ -133,6 +176,7 @@ contract DecentralizedForum {
         address indexed creator,
         string name,
         string metadataCID,
+        string description,
         uint256 createdAt
     );
 
@@ -242,7 +286,18 @@ contract DecentralizedForum {
         uint256 indexed communityId,
         address indexed author,
         string contentCID,
+        string title,
+        string tags,
         uint256 createdAt
+    );
+
+    event PostVoted(
+        uint256 indexed postId,
+        uint256 indexed communityId,
+        address indexed voter,
+        int8 vote,
+        int256 newScore,
+        uint256 votedAt
     );
 
     event PostHidden(
@@ -265,6 +320,67 @@ contract DecentralizedForum {
         bytes32 commentsMerkleRoot,
         address indexed updatedBy,
         uint256 updatedAt
+    );
+
+    event UsernameRegistered(
+        address indexed user,
+        string username,
+        uint256 registeredAt
+    );
+
+    event UsernameChanged(
+        address indexed user,
+        string oldUsername,
+        string newUsername,
+        uint256 changedAt
+    );
+
+    event PostSubmittedForReview(
+        uint256 indexed postId,
+        uint256 indexed communityId,
+        address indexed author,
+        string title,
+        uint256 submittedAt
+    );
+
+    event PendingPostApproved(
+        uint256 indexed postId,
+        uint256 indexed communityId,
+        address indexed moderator,
+        uint256 approvedAt
+    );
+
+    event PendingPostRejected(
+        uint256 indexed postId,
+        uint256 indexed communityId,
+        address indexed moderator,
+        uint256 rejectedAt
+    );
+
+    event CommentSubmittedForReview(
+        uint256 indexed commentId,
+        uint256 indexed postId,
+        uint256 indexed communityId,
+        address author,
+        string content,
+        string imageCid,
+        uint256 submittedAt
+    );
+
+    event PendingCommentApproved(
+        uint256 indexed commentId,
+        uint256 indexed postId,
+        uint256 indexed communityId,
+        address moderator,
+        uint256 approvedAt
+    );
+
+    event PendingCommentRejected(
+        uint256 indexed commentId,
+        uint256 indexed postId,
+        uint256 indexed communityId,
+        address moderator,
+        uint256 rejectedAt
     );
 
     // MODIFIERS //
@@ -311,16 +427,21 @@ contract DecentralizedForum {
     }
 
     // WRITE FUNCTIONS //
-    function createCommunity(string calldata name, string calldata metadataCID) external {
-        _createCommunity(name, metadataCID, 0, msg.sender);
+    function createCommunity(string calldata name, string calldata metadataCID, string calldata description) external {
+        _createCommunity(name, metadataCID, description, 0, msg.sender);
     }
 
-    function createSubCommunity(uint256 parentCommunityId, string calldata name, string calldata metadataCID)
+    function createSubCommunity(
+        uint256 parentCommunityId,
+        string calldata name,
+        string calldata metadataCID,
+        string calldata description
+    )
         external
         communityMustExist(parentCommunityId)
         notBanned(parentCommunityId)
     {
-        _createCommunity(name, metadataCID, parentCommunityId, msg.sender);
+        _createCommunity(name, metadataCID, description, parentCommunityId, msg.sender);
     }
 
     function updateCommunityMetadata(uint256 communityId, string calldata metadataCID)
@@ -656,16 +777,158 @@ contract DecentralizedForum {
         );
     }
 
-    function createPost(uint256 communityId, string calldata contentCID)
+    function createPost(uint256 communityId, string calldata contentCID, string calldata title, string calldata tags)
         external
         communityMustExist(communityId)
         onlyCommunityMember(communityId)
         notBanned(communityId)
     {
-        _createPost(communityId, contentCID, msg.sender);
+        _createPost(communityId, contentCID, title, tags, msg.sender, false);
     }
 
-    function batchCreatePosts(uint256 communityId, string[] calldata contentCIDs)
+    // Entry point for content the client flagged as unsafe: stored hidden and
+    // awaiting a single moderator decision.
+    function createFlaggedPost(uint256 communityId, string calldata contentCID, string calldata title, string calldata tags)
+        external
+        communityMustExist(communityId)
+        onlyCommunityMember(communityId)
+        notBanned(communityId)
+    {
+        _createPost(communityId, contentCID, title, tags, msg.sender, true);
+    }
+
+    function approvePendingPost(uint256 postId)
+        external
+        postMustExist(postId)
+        onlyCommunityModerator(posts[postId].communityId)
+    {
+        if (!postPendingReview[postId]) {
+            revert PostNotPendingReview();
+        }
+
+        postPendingReview[postId] = false;
+        posts[postId].hidden = false;
+
+        uint256 communityId = posts[postId].communityId;
+        address author = posts[postId].author;
+        activityScore[communityId][author] += POST_ACTIVITY_POINTS;
+        _refreshActiveModerators(communityId);
+
+        emit PendingPostApproved(postId, communityId, msg.sender, block.timestamp);
+    }
+
+    function rejectPendingPost(uint256 postId)
+        external
+        postMustExist(postId)
+        onlyCommunityModerator(posts[postId].communityId)
+    {
+        if (!postPendingReview[postId]) {
+            revert PostNotPendingReview();
+        }
+
+        postPendingReview[postId] = false;
+        postRejected[postId] = true;
+
+        emit PendingPostRejected(postId, posts[postId].communityId, msg.sender, block.timestamp);
+    }
+
+    function submitFlaggedComment(uint256 postId, string calldata content, string calldata imageCid)
+        external
+        postMustExist(postId)
+    {
+        if (bytes(content).length == 0) {
+            revert EmptyCommentContent();
+        }
+
+        uint256 communityId = posts[postId].communityId;
+
+        // Ban wins over the membership check: banUser also strips membership,
+        // and the banned error is the meaningful one for the user.
+        if (isBanned[communityId][msg.sender]) {
+            revert UserBannedFromCommunity();
+        }
+
+        if (!isMember[communityId][msg.sender]) {
+            revert OnlyCommunityMembersAllowed();
+        }
+
+        uint256 commentId = nextPendingCommentId;
+        nextPendingCommentId++;
+
+        pendingComments[commentId] = PendingComment({
+            id: commentId,
+            postId: postId,
+            author: msg.sender,
+            content: content,
+            imageCid: imageCid,
+            createdAt: block.timestamp,
+            status: 0,
+            exists: true
+        });
+
+        pendingCommentIdsByPost[postId].push(commentId);
+
+        emit CommentSubmittedForReview(
+            commentId,
+            postId,
+            communityId,
+            msg.sender,
+            content,
+            imageCid,
+            block.timestamp
+        );
+    }
+
+    function approvePendingComment(uint256 commentId) external {
+        PendingComment storage comment = _pendingCommentForReview(commentId);
+        comment.status = 1;
+
+        emit PendingCommentApproved(
+            commentId,
+            comment.postId,
+            posts[comment.postId].communityId,
+            msg.sender,
+            block.timestamp
+        );
+    }
+
+    function rejectPendingComment(uint256 commentId) external {
+        PendingComment storage comment = _pendingCommentForReview(commentId);
+        comment.status = 2;
+
+        emit PendingCommentRejected(
+            commentId,
+            comment.postId,
+            posts[comment.postId].communityId,
+            msg.sender,
+            block.timestamp
+        );
+    }
+
+    function _pendingCommentForReview(uint256 commentId) private view returns (PendingComment storage) {
+        PendingComment storage comment = pendingComments[commentId];
+
+        if (!comment.exists) {
+            revert CommentDoesNotExist();
+        }
+
+        if (comment.status != 0) {
+            revert CommentNotPendingReview();
+        }
+
+        if (!_isModerator(posts[comment.postId].communityId, msg.sender)) {
+            revert OnlyCommunityModeratorAllowed();
+        }
+
+        return comment;
+    }
+
+    function batchCreatePosts(
+        uint256 communityId,
+        string[] calldata contentCIDs,
+        string[] calldata titles,
+        string[] calldata tagsList
+    )
         external
         communityMustExist(communityId)
         onlyCommunityMember(communityId)
@@ -675,9 +938,45 @@ contract DecentralizedForum {
             revert EmptyPostBatch();
         }
 
-        for (uint256 i = 0; i < contentCIDs.length; i++) {
-            _createPost(communityId, contentCIDs[i], msg.sender);
+        if (contentCIDs.length != titles.length || contentCIDs.length != tagsList.length) {
+            revert EmptyPostBatch();
         }
+
+        for (uint256 i = 0; i < contentCIDs.length; i++) {
+            _createPost(communityId, contentCIDs[i], titles[i], tagsList[i], msg.sender, false);
+        }
+    }
+
+    function votePost(uint256 postId, int8 vote)
+        external
+        postMustExist(postId)
+    {
+        if (vote < -1 || vote > 1) {
+            revert InvalidVoteValue();
+        }
+
+        uint256 communityId = posts[postId].communityId;
+
+        if (isBanned[communityId][msg.sender]) {
+            revert UserBannedFromCommunity();
+        }
+
+        int8 previousVote = postVotes[postId][msg.sender];
+        if (previousVote == vote) {
+            return;
+        }
+
+        postVotes[postId][msg.sender] = vote;
+        postScore[postId] = postScore[postId] - int256(previousVote) + int256(vote);
+
+        emit PostVoted(
+            postId,
+            communityId,
+            msg.sender,
+            vote,
+            postScore[postId],
+            block.timestamp
+        );
     }
 
     function hidePost(uint256 postId)
@@ -739,15 +1038,161 @@ contract DecentralizedForum {
         );
     }
 
+    function registerUsername(string calldata username) external {
+        if (bytes(usernames[msg.sender]).length != 0) {
+            revert UsernameAlreadySet();
+        }
+
+        _validateUsername(username);
+
+        bytes32 nameHash = keccak256(bytes(username));
+        if (usernameExists[nameHash]) {
+            revert UsernameAlreadyTaken();
+        }
+
+        usernameExists[nameHash] = true;
+        usernames[msg.sender] = username;
+
+        emit UsernameRegistered(msg.sender, username, block.timestamp);
+    }
+
+    function changeUsername(string calldata newUsername) external payable {
+        string memory oldUsername = usernames[msg.sender];
+
+        if (bytes(oldUsername).length == 0) {
+            revert NoUsernameSet();
+        }
+
+        if (msg.value < USERNAME_CHANGE_FEE) {
+            revert InsufficientUsernameChangeFee();
+        }
+
+        _validateUsername(newUsername);
+
+        bytes32 newHash = keccak256(bytes(newUsername));
+        if (usernameExists[newHash]) {
+            revert UsernameAlreadyTaken();
+        }
+
+        delete usernameExists[keccak256(bytes(oldUsername))];
+        usernameExists[newHash] = true;
+        usernames[msg.sender] = newUsername;
+
+        emit UsernameChanged(msg.sender, oldUsername, newUsername, block.timestamp);
+    }
+
+    // Community names are English-only: letters, digits, underscore, hyphen.
+    function _validateCommunityName(string calldata name) private pure {
+        bytes memory nameBytes = bytes(name);
+
+        if (nameBytes.length < 3 || nameBytes.length > 30) {
+            revert InvalidCommunityName();
+        }
+
+        for (uint256 i = 0; i < nameBytes.length; i++) {
+            bytes1 c = nameBytes[i];
+            bool isLowerCase = (c >= 0x61 && c <= 0x7a);
+            bool isUpperCase = (c >= 0x41 && c <= 0x5a);
+            bool isDigit = (c >= 0x30 && c <= 0x39);
+            bool isSeparator = (c == 0x5f || c == 0x2d);
+
+            if (!isLowerCase && !isUpperCase && !isDigit && !isSeparator) {
+                revert InvalidCommunityName();
+            }
+        }
+    }
+
+    // Enforces format (charset, length) and anti-impersonation rules. Profanity
+    // filtering is handled client-side; the chain only guarantees what it can
+    // verify cheaply.
+    function _validateUsername(string calldata username) private pure {
+        bytes memory nameBytes = bytes(username);
+
+        if (nameBytes.length < USERNAME_MIN_LENGTH) {
+            revert UsernameTooShort();
+        }
+
+        if (nameBytes.length > USERNAME_MAX_LENGTH) {
+            revert UsernameTooLong();
+        }
+
+        bytes memory lower = new bytes(nameBytes.length);
+        for (uint256 i = 0; i < nameBytes.length; i++) {
+            bytes1 c = nameBytes[i];
+            bool isLowerCase = (c >= 0x61 && c <= 0x7a);
+            bool isUpperCase = (c >= 0x41 && c <= 0x5a);
+            bool isDigit = (c >= 0x30 && c <= 0x39);
+            bool isUnderscore = (c == 0x5f);
+
+            if (!isLowerCase && !isUpperCase && !isDigit && !isUnderscore) {
+                revert InvalidUsernameCharacter();
+            }
+
+            lower[i] = isUpperCase ? bytes1(uint8(c) + 32) : c;
+        }
+
+        if (
+            _hasReservedToken(lower, "mod") ||
+            _hasReservedToken(lower, "admin") ||
+            _hasReservedToken(lower, "gm") ||
+            _hasReservedToken(lower, "moderator")
+        ) {
+            revert ReservedUsername();
+        }
+    }
+
+    // Blocks a reserved token when it stands alone: the whole name, a prefix
+    // followed by a non-letter (mod_dan, admin123), or a suffix preceded by a
+    // non-letter (x_mod). Tokens embedded in longer words (modern) stay legal.
+    function _hasReservedToken(bytes memory lowerName, bytes memory token) private pure returns (bool) {
+        uint256 nameLength = lowerName.length;
+        uint256 tokenLength = token.length;
+
+        if (nameLength < tokenLength) {
+            return false;
+        }
+
+        if (nameLength == tokenLength) {
+            return _matchesAt(lowerName, token, 0);
+        }
+
+        if (_matchesAt(lowerName, token, 0) && !_isLetter(lowerName[tokenLength])) {
+            return true;
+        }
+
+        if (_matchesAt(lowerName, token, nameLength - tokenLength) && !_isLetter(lowerName[nameLength - tokenLength - 1])) {
+            return true;
+        }
+
+        return false;
+    }
+
+    function _matchesAt(bytes memory haystack, bytes memory needle, uint256 offset) private pure returns (bool) {
+        for (uint256 i = 0; i < needle.length; i++) {
+            if (haystack[offset + i] != needle[i]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    function _isLetter(bytes1 c) private pure returns (bool) {
+        return c >= 0x61 && c <= 0x7a;
+    }
+
     function _createCommunity(
         string calldata name,
         string calldata metadataCID,
+        string calldata description,
         uint256 parentCommunityId,
         address creator
     ) private {
         if (bytes(name).length == 0) {
             revert EmptyCommunityName();
         }
+
+        _validateCommunityName(name);
 
         if (bytes(metadataCID).length == 0) {
             revert EmptyMetadataCID();
@@ -790,6 +1235,7 @@ contract DecentralizedForum {
             creator,
             name,
             metadataCID,
+            description,
             block.timestamp
         );
 
@@ -800,6 +1246,7 @@ contract DecentralizedForum {
                 creator,
                 name,
                 metadataCID,
+                description,
                 block.timestamp
             );
         }
@@ -818,7 +1265,14 @@ contract DecentralizedForum {
         );
     }
 
-    function _createPost(uint256 communityId, string calldata contentCID, address author)
+    function _createPost(
+        uint256 communityId,
+        string calldata contentCID,
+        string calldata title,
+        string calldata tags,
+        address author,
+        bool flagged
+    )
         private
     {
         if (bytes(contentCID).length == 0) {
@@ -835,22 +1289,41 @@ contract DecentralizedForum {
             contentCID: contentCID,
             createdAt: block.timestamp,
             exists: true,
-            hidden: false
+            hidden: flagged
         });
 
         communityPostIds[communityId].push(postId);
         userPostCount[author]++;
-        activityScore[communityId][author] += POST_ACTIVITY_POINTS;
         _trackKnownUser(communityId, author);
-        _refreshActiveModerators(communityId);
+
+        // Activity points wait until a moderator approves a flagged post, so
+        // unsafe content cannot farm Active-Moderator status.
+        if (!flagged) {
+            activityScore[communityId][author] += POST_ACTIVITY_POINTS;
+            _refreshActiveModerators(communityId);
+        } else {
+            postPendingReview[postId] = true;
+        }
 
         emit PostCreated(
             postId,
             communityId,
             author,
             contentCID,
+            title,
+            tags,
             block.timestamp
         );
+
+        if (flagged) {
+            emit PostSubmittedForReview(
+                postId,
+                communityId,
+                author,
+                title,
+                block.timestamp
+            );
+        }
     }
 
     function _trackKnownUser(uint256 communityId, address user) private {
@@ -1319,5 +1792,56 @@ contract DecentralizedForum {
             commentsMerkleRootByPost[postId],
             commentsMerkleRootUpdatedAt[postId]
         );
+    }
+
+    function getPendingCommentsByPost(uint256 postId)
+        external
+        view
+        postMustExist(postId)
+        returns (uint256[] memory)
+    {
+        return pendingCommentIdsByPost[postId];
+    }
+
+    function getPendingComment(uint256 commentId)
+        external
+        view
+        returns (
+            uint256 id,
+            uint256 postId,
+            address author,
+            string memory content,
+            string memory imageCid,
+            uint256 createdAt,
+            uint8 status
+        )
+    {
+        PendingComment storage comment = pendingComments[commentId];
+
+        if (!comment.exists) {
+            revert CommentDoesNotExist();
+        }
+
+        return (
+            comment.id,
+            comment.postId,
+            comment.author,
+            comment.content,
+            comment.imageCid,
+            comment.createdAt,
+            comment.status
+        );
+    }
+
+    function getUsername(address user) external view returns (string memory) {
+        return usernames[user];
+    }
+
+    function isUsernameAvailable(string calldata username) external view returns (bool) {
+        if (bytes(username).length == 0) {
+            return false;
+        }
+
+        return !usernameExists[keccak256(bytes(username))];
     }
 }

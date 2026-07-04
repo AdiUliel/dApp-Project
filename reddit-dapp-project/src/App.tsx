@@ -1,11 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ethers } from 'ethers'
 import contractArtifact from './DecentralizedForum.json'
-import { addJson, getJson } from './ipfs'
+import { addJson, addFile, getJson, ipfsUrl } from './ipfs'
+import Modal from './Modal'
+import { validateUsername, isValidCommunityName } from './usernamePolicy'
+import { checkContentSafety } from './contentSafety'
+import { loadLanguage, makeTranslator, LANGUAGE_STORAGE_KEY, type Language, type TranslationKey } from './i18n'
+import {
+  fetchApprovedComments,
+  fetchPendingComments,
+  fetchRecentPosts,
+  fetchUserActivities,
+  fetchUserNotifications,
+  fetchUserProfile,
+  graphQuery,
+  searchByTag,
+  searchCommunities,
+  searchPosts,
+  searchUsers,
+  type GraphActivity,
+  type GraphPost,
+  type GraphUser,
+} from './graph'
 import './App.css'
 
 const CONTRACT_ADDRESS = '0x5FbDB2315678afecb367f032d93F642f64180aa3'
 const COMMENTS_STORAGE_KEY = 'reppit_signed_comments_v1'
+const READ_NOTIFICATIONS_KEY = 'reppit_read_notifications_v1'
+const USERNAME_CHANGE_FEE_ETH = '0.05'
+
+type View = 'home' | 'community' | 'profile' | 'search'
 
 type Community = {
   id: string
@@ -45,12 +69,15 @@ type Post = {
   contentCID: string
   createdAt: string
   hidden: boolean
+  pending: boolean
+  rejected: boolean
 }
 
 type PostMetadata = {
   title: string
   body: string
   tags?: string[]
+  images?: string[]
 }
 
 type IpfsMetadataRecord = PostMetadata | CommunityMetadata
@@ -62,7 +89,57 @@ type SignedComment = {
   createdAt: number
   message: string
   signature: string
+  imageCid?: string
 }
+
+type OnChainComment = {
+  id: string
+  postId: string
+  author: string
+  content: string
+  imageCid: string
+  createdAt: number
+  status: number
+}
+
+type VoteInfo = {
+  score: number
+  myVote: number
+}
+
+type TrendingPost = {
+  id: string
+  communityId: string
+  communityName: string
+  author: string
+  contentCID: string
+  createdAt: number
+  score: number
+  title: string
+  tags: string[]
+}
+
+type NotificationItem = {
+  id: string
+  type: string
+  detail: string
+  actorLabel: string
+  timestamp: number
+}
+
+type SearchFilter = 'all' | 'posts' | 'communities' | 'users' | 'tags'
+
+type SearchResults = {
+  posts: GraphPost[]
+  communities: { id: string; name: string; description: string; membersCount: string; createdAt: string }[]
+  users: GraphUser[]
+  tagPosts: GraphPost[]
+  graphOffline: boolean
+}
+
+type ReviewPrompt =
+  | { kind: 'post'; selfHarm: boolean }
+  | { kind: 'comment'; postId: string; selfHarm: boolean }
 
 declare global {
   interface Window {
@@ -80,10 +157,33 @@ const isCommunityMetadata = (value: IpfsMetadataRecord | null): value is Communi
   return Boolean(value && 'description' in value)
 }
 
+// Reddit-style "hot" ranking: vote magnitude on a log scale plus time decay,
+// so newer posts and higher-scored posts float up together.
+const hotScore = (score: number, createdAtSeconds: number, isMemberCommunity: boolean) => {
+  const magnitude = Math.log10(Math.max(Math.abs(score), 1))
+  const sign = score > 0 ? 1 : score < 0 ? -1 : 0
+  const membershipBoost = isMemberCommunity ? 0.4 : 0
+  return sign * magnitude + createdAtSeconds / 45000 + membershipBoost
+}
+
 function App() {
+  const [lang, setLang] = useState<Language>(loadLanguage)
+  const t = useMemo(() => makeTranslator(lang), [lang])
+
   const [walletAddress, setWalletAddress] = useState('')
   const [statusMessage, setStatusMessage] = useState('')
+  const [modNotification, setModNotification] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
+  const [view, setView] = useState<View>('home')
+  const knownModeratorCommunities = useRef(new Set<string>())
+
+  const [username, setUsername] = useState('')
+  const [showUsernameModal, setShowUsernameModal] = useState(false)
+  const [showChangeUsernameModal, setShowChangeUsernameModal] = useState(false)
+  const [usernameInput, setUsernameInput] = useState('')
+  const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null)
+  const [usernamesCache, setUsernamesCache] = useState<Record<string, string>>({})
+  const requestedUsernameAddresses = useRef(new Set<string>())
 
   const [ipfsCache, setIpfsCache] = useState<Record<string, IpfsMetadataRecord>>({})
   const requestedCids = useRef(new Set<string>())
@@ -92,19 +192,32 @@ function App() {
   const [selectedCommunityId, setSelectedCommunityId] = useState('')
   const [newCommunityName, setNewCommunityName] = useState('')
   const [newCommunityDesc, setNewCommunityDesc] = useState('')
+  const [showCreateCommunityModal, setShowCreateCommunityModal] = useState(false)
 
   const [newSubCommunityName, setNewSubCommunityName] = useState('')
   const [newSubCommunityDesc, setNewSubCommunityDesc] = useState('')
+  const [showCreateSubCommunityModal, setShowCreateSubCommunityModal] = useState(false)
 
   const [posts, setPosts] = useState<Post[]>([])
   const [showCreatePost, setShowCreatePost] = useState(false)
   const [postTitle, setPostTitle] = useState('')
   const [postBody, setPostBody] = useState('')
   const [postTags, setPostTags] = useState('')
+  const [postImages, setPostImages] = useState<File[]>([])
+  const [uploadingMedia, setUploadingMedia] = useState(false)
   const [selectedPostId, setSelectedPostId] = useState('')
+
+  const [votesByPost, setVotesByPost] = useState<Record<string, VoteInfo>>({})
+  const [trendingPosts, setTrendingPosts] = useState<TrendingPost[]>([])
+  const [trendingSource, setTrendingSource] = useState<'graph' | 'chain'>('chain')
 
   const [comments, setComments] = useState<SignedComment[]>([])
   const [newCommentByPost, setNewCommentByPost] = useState<Record<string, string>>({})
+  const [commentImageByPost, setCommentImageByPost] = useState<Record<string, File | undefined>>({})
+  const [onChainComments, setOnChainComments] = useState<OnChainComment[]>([])
+  const [pendingComments, setPendingComments] = useState<OnChainComment[]>([])
+
+  const [reviewPrompt, setReviewPrompt] = useState<ReviewPrompt | null>(null)
 
   const [moderators, setModerators] = useState<ModeratorDisplay[]>([])
   const [topActiveUsers, setTopActiveUsers] = useState<string[]>([])
@@ -112,6 +225,20 @@ function App() {
   const [addProposalId, setAddProposalId] = useState('')
   const [removeTargetAddress, setRemoveTargetAddress] = useState('')
   const [removeProposalId, setRemoveProposalId] = useState('')
+  const [showModeratorActionsModal, setShowModeratorActionsModal] = useState(false)
+
+  const [profileAddress, setProfileAddress] = useState('')
+  const [profileData, setProfileData] = useState<GraphUser | null>(null)
+  const [profileActivities, setProfileActivities] = useState<GraphActivity[]>([])
+  const [profileGraphOffline, setProfileGraphOffline] = useState(false)
+
+  const [notifications, setNotifications] = useState<NotificationItem[]>([])
+  const [readNotificationIds, setReadNotificationIds] = useState<string[]>([])
+
+  const [searchFilter, setSearchFilter] = useState<SearchFilter>('all')
+  const [searchResults, setSearchResults] = useState<SearchResults | null>(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [activeSearchTerm, setActiveSearchTerm] = useState('')
 
   const selectedCommunity = communities.find((community) => community.id === selectedCommunityId)
 
@@ -126,33 +253,134 @@ function App() {
 
   const rootCommunities = communitiesByParent['0'] || []
 
-  const visiblePosts = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase()
+  const myAddress = walletAddress.toLowerCase()
 
-    return posts
-      .filter((post) => !post.hidden || selectedCommunity?.isModerator)
-      .filter((post) => {
-        if (!query) return true
-        const metadata = getPostMetadata(post)
-        return (
-          metadata.title.toLowerCase().includes(query) ||
-          metadata.body.toLowerCase().includes(query) ||
-          metadata.tags?.some((tag) => tag.toLowerCase().includes(query))
-        )
-      })
-  }, [posts, selectedCommunity?.isModerator, searchQuery, ipfsCache])
+  const visiblePosts = useMemo(() => {
+    return posts.filter((post) => {
+      if (selectedCommunity?.isModerator) return true
+      if (post.author.toLowerCase() === myAddress) return true
+      return !post.hidden && !post.pending && !post.rejected
+    })
+  }, [posts, selectedCommunity?.isModerator, myAddress])
+
+  const pendingPosts = useMemo(() => posts.filter((post) => post.pending), [posts])
 
   const selectedPost = visiblePosts.find((post) => post.id === selectedPostId) || visiblePosts[0]
 
+  const rankedTrending = useMemo(() => {
+    const memberCommunityIds = new Set(communities.filter((c) => c.isMember).map((c) => c.id))
+    return [...trendingPosts].sort(
+      (a, b) =>
+        hotScore(b.score, b.createdAt, memberCommunityIds.has(b.communityId)) -
+        hotScore(a.score, a.createdAt, memberCommunityIds.has(a.communityId))
+    )
+  }, [trendingPosts, communities])
+
+  const unreadNotificationsCount = useMemo(() => {
+    const read = new Set(readNotificationIds)
+    return notifications.filter((notification) => !read.has(notification.id)).length
+  }, [notifications, readNotificationIds])
+
   useEffect(() => {
     loadLocalComments()
+    setReadNotificationIds(loadReadNotificationIds())
   }, [])
 
   useEffect(() => {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, lang)
+  }, [lang])
+
+  useEffect(() => {
     if (walletAddress) {
-      loadCommunities(walletAddress)
+      loadCommunities(walletAddress, true)
+      loadUsername(walletAddress)
+      loadNotifications(walletAddress)
     }
   }, [walletAddress])
+
+  useEffect(() => {
+    const addresses = new Set<string>()
+    communities.forEach((community) => addresses.add(community.creator))
+    posts.forEach((post) => addresses.add(post.author))
+    moderators.forEach((moderator) => addresses.add(moderator.address))
+    topActiveUsers.forEach((address) => addresses.add(address))
+    comments.forEach((comment) => addresses.add(comment.author))
+    trendingPosts.forEach((post) => addresses.add(post.author))
+    onChainComments.forEach((comment) => addresses.add(comment.author))
+    pendingComments.forEach((comment) => addresses.add(comment.author))
+    addresses.forEach(fetchUsername)
+  }, [communities, posts, moderators, topActiveUsers, comments, trendingPosts, onChainComments, pendingComments])
+
+  useEffect(() => {
+    if (!walletAddress || !window.ethereum) return
+
+    let cancelled = false
+    const provider = new ethers.BrowserProvider(window.ethereum as ethers.Eip1193Provider)
+    const contract = new ethers.Contract(CONTRACT_ADDRESS, contractArtifact.abi, provider)
+
+    const announceNewModerator = async (communityId: string) => {
+      if (knownModeratorCommunities.current.has(communityId)) return
+      knownModeratorCommunities.current.add(communityId)
+
+      const name = await getCommunityName(communityId)
+      if (cancelled) return
+
+      setModNotification(t('becameModerator', { name }))
+      setTimeout(() => {
+        if (!cancelled) setModNotification('')
+      }, 6000)
+
+      loadCommunities(walletAddress)
+    }
+
+    const onModeratorAdded = (communityId: bigint, moderator: string) => {
+      if (moderator.toLowerCase() === walletAddress.toLowerCase()) {
+        announceNewModerator(communityId.toString())
+      }
+    }
+
+    const onActiveModeratorsUpdated = (communityId: bigint, first: string, second: string) => {
+      const address = walletAddress.toLowerCase()
+      if (first.toLowerCase() === address || second.toLowerCase() === address) {
+        announceNewModerator(communityId.toString())
+      }
+    }
+
+    contract.on('ModeratorAdded', onModeratorAdded)
+    contract.on('ActiveModeratorsUpdated', onActiveModeratorsUpdated)
+
+    return () => {
+      cancelled = true
+      contract.off('ModeratorAdded', onModeratorAdded)
+      contract.off('ActiveModeratorsUpdated', onActiveModeratorsUpdated)
+    }
+  }, [walletAddress, lang])
+
+  useEffect(() => {
+    const name = usernameInput.trim()
+
+    if (!name) {
+      setUsernameAvailable(null)
+      return
+    }
+
+    let cancelled = false
+    const timeoutId = setTimeout(() => {
+      getContract(false)
+        .then((contract) => contract.isUsernameAvailable(name))
+        .then((available: boolean) => {
+          if (!cancelled) setUsernameAvailable(available)
+        })
+        .catch(() => {
+          if (!cancelled) setUsernameAvailable(null)
+        })
+    }, 400)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timeoutId)
+    }
+  }, [usernameInput])
 
   useEffect(() => {
     if (selectedCommunityId) {
@@ -163,8 +391,22 @@ function App() {
       setPosts([])
       setModerators([])
       setTopActiveUsers([])
+      setOnChainComments([])
+      setPendingComments([])
     }
   }, [selectedCommunityId])
+
+  useEffect(() => {
+    if (view === 'home' && walletAddress) {
+      loadTrending()
+    }
+  }, [view, walletAddress])
+
+  useEffect(() => {
+    if (view === 'profile' && profileAddress) {
+      loadProfileData(profileAddress)
+    }
+  }, [view, profileAddress])
 
   useEffect(() => {
     communities.forEach((community) => fetchIpfsMetadata(community.metadataCID))
@@ -173,6 +415,10 @@ function App() {
   useEffect(() => {
     posts.forEach((post) => fetchIpfsMetadata(post.contentCID))
   }, [posts])
+
+  useEffect(() => {
+    trendingPosts.forEach((post) => fetchIpfsMetadata(post.contentCID))
+  }, [trendingPosts])
 
   const getProvider = () => {
     if (!window.ethereum) {
@@ -241,18 +487,61 @@ function App() {
     getJson<IpfsMetadataRecord>(cid)
       .then((metadata) => setIpfsCache((prev) => ({ ...prev, [cid]: metadata })))
       .catch((error) => {
-        console.error('שגיאה בטעינת תוכן מ-IPFS:', error)
+        console.error('Failed to load content from IPFS:', error)
         requestedCids.current.delete(cid)
       })
+  }
+
+  // Fetches the registered username (if any) for an address and stores it in the cache. Safe to call repeatedly.
+  const fetchUsername = (address: string) => {
+    if (!address || requestedUsernameAddresses.current.has(address)) return
+
+    requestedUsernameAddresses.current.add(address)
+
+    getContract(false)
+      .then((contract) => contract.getUsername(address))
+      .then((name: string) => {
+        if (name) setUsernamesCache((prev) => ({ ...prev, [address]: name }))
+      })
+      .catch((error) => {
+        console.error('Failed to load username:', error)
+        requestedUsernameAddresses.current.delete(address)
+      })
+  }
+
+  const loadUsername = async (account: string) => {
+    try {
+      const contract = await getContract(false)
+      const name = await contract.getUsername(account)
+      setUsername(name)
+      setShowUsernameModal(!name)
+    } catch (error) {
+      console.error('Failed to load my username:', error)
+    }
   }
 
   const getCommunityDescription = (community: Community) => {
     const metadata = ipfsCache[community.metadataCID]
     if (isCommunityMetadata(metadata)) return metadata.description
-    return 'טוען תיאור מ-IPFS...'
+    return '...'
   }
 
-  const getPostMetadata = (post: Post): PostMetadata => {
+  const getCommunityName = async (communityId: string) => {
+    const cached = communities.find((community) => community.id === communityId)
+    if (cached) return cached.name
+
+    const contract = await getContract(false)
+
+    try {
+      const community = await contract.getCommunityV2(communityId)
+      return community[1] as string
+    } catch {
+      const community = await contract.getCommunity(communityId)
+      return community[1] as string
+    }
+  }
+
+  const getPostMetadata = (post: { id: string; contentCID: string }): PostMetadata => {
     const metadata = ipfsCache[post.contentCID]
 
     if (isPostMetadata(metadata)) {
@@ -261,7 +550,7 @@ function App() {
 
     return {
       title: `Post #${post.id}`,
-      body: 'טוען תוכן מ-IPFS...',
+      body: '...',
       tags: [],
     }
   }
@@ -271,15 +560,70 @@ function App() {
       const provider = getProvider()
       const accounts = await provider.send('eth_requestAccounts', [])
       setWalletAddress(accounts[0])
-      await loadCommunities(accounts[0])
-      setTemporaryStatus('הארנק חובר בהצלחה')
+      await loadCommunities(accounts[0], true)
+      setTemporaryStatus(t('walletConnected'))
     } catch (error) {
-      console.error('שגיאה בהתחברות:', error)
-      alert('שגיאה בהתחברות ל-MetaMask')
+      console.error('Wallet connection failed:', error)
+      alert(t('connectFailed'))
     }
   }
 
-  const loadCommunities = async (account = walletAddress) => {
+  const submitUsername = async () => {
+    const name = usernameInput.trim()
+    const policyError = validateUsername(name)
+
+    if (policyError) {
+      alert(t(`username_${policyError}` as TranslationKey))
+      return
+    }
+
+    try {
+      const contract = await getContract(true)
+      const tx = await contract.registerUsername(name)
+      setTemporaryStatus(t('registering'))
+      await tx.wait()
+
+      setUsername(name)
+      setUsernamesCache((prev) => ({ ...prev, [walletAddress]: name }))
+      setShowUsernameModal(false)
+      setUsernameInput('')
+      setTemporaryStatus(t('registered', { name }))
+    } catch (error) {
+      console.error('Username registration failed:', error)
+      alert(t('registerFailed'))
+    }
+  }
+
+  const submitUsernameChange = async () => {
+    const name = usernameInput.trim()
+    const policyError = validateUsername(name)
+
+    if (policyError) {
+      alert(t(`username_${policyError}` as TranslationKey))
+      return
+    }
+
+    try {
+      const contract = await getContract(true)
+      const fee = await contract.USERNAME_CHANGE_FEE()
+      const tx = await contract.changeUsername(name, { value: fee })
+      setTemporaryStatus(t('changing'))
+      await tx.wait()
+
+      const oldName = username
+      setUsername(name)
+      setUsernamesCache((prev) => ({ ...prev, [walletAddress]: name }))
+      setShowChangeUsernameModal(false)
+      setUsernameInput('')
+      setTemporaryStatus(t('changed', { old: oldName, new: name }))
+      if (view === 'profile') loadProfileData(profileAddress)
+    } catch (error) {
+      console.error('Username change failed:', error)
+      alert(t('changeFailed'))
+    }
+  }
+
+  const loadCommunities = async (account = walletAddress, seedKnownModerators = false) => {
     try {
       const contract = await getContract(false)
       const ids = await contract.getAllCommunityIds()
@@ -337,12 +681,35 @@ function App() {
 
       setCommunities(loadedCommunities)
 
-      if (!selectedCommunityId && loadedCommunities.length > 0) {
-        setSelectedCommunityId(loadedCommunities[0].id)
+      if (account && seedKnownModerators) {
+        loadedCommunities.forEach((community) => {
+          if (community.isModerator) {
+            knownModeratorCommunities.current.add(community.id)
+          }
+        })
       }
     } catch (error) {
-      console.error('שגיאה בטעינת קהילות:', error)
-      setTemporaryStatus('לא הצלחתי לטעון קהילות. ודא ש-Hardhat node פעיל והחוזה פרוס.')
+      console.error('Failed to load communities:', error)
+      setTemporaryStatus(t('loadCommunitiesFailed'))
+    }
+  }
+
+  const loadVotesFor = async (postIds: string[], account = walletAddress) => {
+    try {
+      const contract = await getContract(false)
+      const entries: Record<string, VoteInfo> = {}
+
+      for (const postId of postIds) {
+        const [score, myVote] = await Promise.all([
+          contract.postScore(postId),
+          account ? contract.postVotes(postId, account) : Promise.resolve(0),
+        ])
+        entries[postId] = { score: Number(score), myVote: Number(myVote) }
+      }
+
+      setVotesByPost((prev) => ({ ...prev, ...entries }))
+    } catch (error) {
+      console.error('Failed to load votes:', error)
     }
   }
 
@@ -354,6 +721,10 @@ function App() {
 
       for (const id of postIds) {
         const post = await contract.getPost(id)
+        const [pending, rejected] = await Promise.all([
+          contract.postPendingReview(id),
+          contract.postRejected(id),
+        ])
 
         loadedPosts.push({
           id: post[0].toString(),
@@ -362,13 +733,158 @@ function App() {
           contentCID: post[3],
           createdAt: post[4].toString(),
           hidden: post[6],
+          pending,
+          rejected,
         })
       }
 
       setPosts(loadedPosts.reverse())
+      loadVotesFor(loadedPosts.map((post) => post.id))
+      loadOnChainComments(communityId, loadedPosts)
     } catch (error) {
-      console.error('שגיאה בטעינת פוסטים:', error)
+      console.error('Failed to load posts:', error)
       setPosts([])
+    }
+  }
+
+  // Approved + pending on-chain comments for the community. Prefers the graph;
+  // falls back to per-post chain reads.
+  const loadOnChainComments = async (communityId: string, communityPosts: Post[]) => {
+    const [graphPending, approvedPerPost] = await Promise.all([
+      fetchPendingComments(communityId),
+      Promise.all(communityPosts.map((post) => fetchApprovedComments(post.id))),
+    ])
+
+    if (graphPending !== null) {
+      setPendingComments(
+        graphPending.map((comment) => ({
+          id: comment.id,
+          postId: comment.post.id,
+          author: comment.author.id,
+          content: comment.content,
+          imageCid: comment.imageCid,
+          createdAt: Number(comment.createdAt),
+          status: comment.status,
+        }))
+      )
+
+      const approved: OnChainComment[] = []
+      approvedPerPost.forEach((batch) => {
+        if (batch) {
+          batch.forEach((comment) => {
+            approved.push({
+              id: comment.id,
+              postId: comment.post.id,
+              author: comment.author.id,
+              content: comment.content,
+              imageCid: comment.imageCid,
+              createdAt: Number(comment.createdAt),
+              status: comment.status,
+            })
+          })
+        }
+      })
+      setOnChainComments(approved)
+      return
+    }
+
+    // Chain fallback
+    try {
+      const contract = await getContract(false)
+      const pending: OnChainComment[] = []
+      const approved: OnChainComment[] = []
+
+      for (const post of communityPosts) {
+        const ids = await contract.getPendingCommentsByPost(post.id)
+
+        for (const id of ids) {
+          const c = await contract.getPendingComment(id)
+          const item: OnChainComment = {
+            id: c[0].toString(),
+            postId: c[1].toString(),
+            author: c[2],
+            content: c[3],
+            imageCid: c[4],
+            createdAt: Number(c[5]),
+            status: Number(c[6]),
+          }
+
+          if (item.status === 0) pending.push(item)
+          if (item.status === 1) approved.push(item)
+        }
+      }
+
+      setPendingComments(pending)
+      setOnChainComments(approved)
+    } catch (error) {
+      console.error('Failed to load on-chain comments:', error)
+    }
+  }
+
+  // Home feed. Prefers the subgraph (rich data in one query); falls back to
+  // direct chain reads when the graph stack is offline.
+  const loadTrending = async () => {
+    const graphPosts = await fetchRecentPosts(50)
+
+    if (graphPosts) {
+      setTrendingSource('graph')
+      setTrendingPosts(
+        graphPosts.map((post) => ({
+          id: post.id,
+          communityId: post.community.id,
+          communityName: post.community.name,
+          author: post.author.id,
+          contentCID: post.contentCID,
+          createdAt: Number(post.createdAt),
+          score: Number(post.score),
+          title: post.title,
+          tags: post.tags,
+        }))
+      )
+      loadVotesFor(graphPosts.map((post) => post.id))
+      return
+    }
+
+    setTrendingSource('chain')
+
+    try {
+      const contract = await getContract(false)
+      const communityIds = await contract.getAllCommunityIds()
+      const collected: TrendingPost[] = []
+
+      for (const communityId of communityIds) {
+        const community = communities.find((c) => c.id === communityId.toString())
+        const name = community ? community.name : (await contract.getCommunity(communityId))[1]
+        const postIds = await contract.getPostsByCommunity(communityId)
+
+        for (const postId of postIds) {
+          const post = await contract.getPost(postId)
+          if (post[6]) continue
+
+          const rejected = await contract.postRejected(postId)
+          if (rejected) continue
+
+          const score = await contract.postScore(postId)
+
+          collected.push({
+            id: post[0].toString(),
+            communityId: communityId.toString(),
+            communityName: name,
+            author: post[2],
+            contentCID: post[3],
+            createdAt: Number(post[4]),
+            score: Number(score),
+            title: '',
+            tags: [],
+          })
+        }
+      }
+
+      setTrendingPosts(collected)
+      loadVotesFor(collected.map((post) => post.id))
+    } catch (error) {
+      console.error('Failed to load trending posts:', error)
+      setTrendingPosts([])
     }
   }
 
@@ -399,7 +915,7 @@ function App() {
       setModerators(loadedModerators)
       setTopActiveUsers([topUsers[0], topUsers[1]].filter((address) => address && address !== emptyAddress))
     } catch (error) {
-      console.error('שגיאה בטעינת Moderators:', error)
+      console.error('Failed to load moderators:', error)
       setModerators([])
       setTopActiveUsers([])
     }
@@ -416,7 +932,7 @@ function App() {
     try {
       setComments(JSON.parse(rawComments))
     } catch (error) {
-      console.error('שגיאה בטעינת תגובות מקומיות:', error)
+      console.error('Failed to load local comments:', error)
       setComments([])
     }
   }
@@ -426,63 +942,149 @@ function App() {
     setComments(nextComments)
   }
 
+  const loadReadNotificationIds = (): string[] => {
+    try {
+      return JSON.parse(localStorage.getItem(READ_NOTIFICATIONS_KEY) || '[]')
+    } catch {
+      return []
+    }
+  }
+
+  const markAllNotificationsRead = () => {
+    const ids = notifications.map((notification) => notification.id)
+    localStorage.setItem(READ_NOTIFICATIONS_KEY, JSON.stringify(ids))
+    setReadNotificationIds(ids)
+  }
+
+  // Merges on-chain notifications from the subgraph with comment replies found
+  // in this browser's localStorage (comments are off-chain, so replies from
+  // other machines are not visible here).
+  const loadNotifications = async (account: string) => {
+    const items: NotificationItem[] = []
+
+    const graphNotifications = await fetchUserNotifications(account, 50)
+    if (graphNotifications) {
+      for (const notification of graphNotifications) {
+        items.push({
+          id: notification.id,
+          type: notification.type,
+          detail: notification.detail || '',
+          actorLabel: notification.actor ? notification.actor.username || notification.actor.id : '',
+          timestamp: Number(notification.timestamp) * 1000,
+        })
+      }
+    }
+
+    const myPosts = await graphQuery<{ posts: { id: string; title: string }[] }>(
+      `query ($author: String!) { posts(where: { author: $author }) { id title } }`,
+      { author: account.toLowerCase() }
+    )
+
+    if (myPosts) {
+      const myPostsById = new Map(myPosts.posts.map((post) => [post.id, post.title]))
+      const rawComments = localStorage.getItem(COMMENTS_STORAGE_KEY)
+      const localComments: SignedComment[] = rawComments ? JSON.parse(rawComments) : []
+
+      for (const comment of localComments) {
+        if (myPostsById.has(comment.postId) && comment.author.toLowerCase() !== account.toLowerCase()) {
+          items.push({
+            id: `comment-${comment.signature.slice(0, 18)}`,
+            type: 'COMMENT_REPLY',
+            detail: myPostsById.get(comment.postId) || '',
+            actorLabel: comment.author,
+            timestamp: comment.createdAt,
+          })
+        }
+      }
+    }
+
+    items.sort((a, b) => b.timestamp - a.timestamp)
+    setNotifications(items)
+  }
+
+  const loadProfileData = async (address: string) => {
+    const [profile, activities] = await Promise.all([fetchUserProfile(address), fetchUserActivities(address, 30)])
+
+    setProfileGraphOffline(profile === null && activities === null)
+    setProfileData(profile)
+    setProfileActivities(activities || [])
+
+    if (address.toLowerCase() === walletAddress.toLowerCase()) {
+      loadNotifications(address)
+    }
+  }
+
   const createCommunity = async () => {
     if (!newCommunityName.trim() || !newCommunityDesc.trim()) {
-      alert('נא למלא שם ותיאור לקהילה')
+      alert(t('fillNameDesc'))
+      return
+    }
+
+    if (!isValidCommunityName(newCommunityName.trim())) {
+      alert(t('communityNameInvalid'))
       return
     }
 
     try {
+      const description = newCommunityDesc.trim()
       const metadataCID = await publishToIpfs({
-        description: newCommunityDesc.trim(),
+        description,
         rules: ['Be respectful', 'Keep posts relevant', 'No spam'],
       })
 
       const contract = await getContract(true)
       const communityName = newCommunityName.trim()
-      const tx = await contract.createCommunity(communityName, metadataCID)
+      const tx = await contract.createCommunity(communityName, metadataCID, description)
 
-      setTemporaryStatus('העסקה נשלחה. ממתין לאישור יצירת הקהילה...')
+      setTemporaryStatus(t('creatingCommunity'))
       await tx.wait()
 
       setNewCommunityName('')
       setNewCommunityDesc('')
+      setShowCreateCommunityModal(false)
       const account = await getCurrentWalletAddress()
       await loadCommunities(account)
-      setTemporaryStatus(`הקהילה r/${communityName} נוצרה בהצלחה`) 
+      setTemporaryStatus(t('communityCreated', { name: communityName }))
     } catch (error) {
-      console.error('שגיאה ביצירת קהילה:', error)
-      alert('שגיאה ביצירת הקהילה. ייתכן שהשם כבר קיים או שהחוזה לא מחובר.')
+      console.error('Community creation failed:', error)
+      alert(t('createCommunityFailed'))
     }
   }
 
   const createSubCommunity = async () => {
     if (!selectedCommunityId || !newSubCommunityName.trim() || !newSubCommunityDesc.trim()) {
-      alert('נא לבחור קהילת אב ולמלא שם ותיאור לתת־קהילה')
+      alert(t('fillSubFields'))
+      return
+    }
+
+    if (!isValidCommunityName(newSubCommunityName.trim())) {
+      alert(t('communityNameInvalid'))
       return
     }
 
     try {
+      const description = newSubCommunityDesc.trim()
       const metadataCID = await publishToIpfs({
-        description: newSubCommunityDesc.trim(),
+        description,
         rules: ['Follow parent community rules', 'Keep discussions focused'],
       })
 
       const contract = await getContract(true)
       const subName = newSubCommunityName.trim()
-      const tx = await contract.createSubCommunity(selectedCommunityId, subName, metadataCID)
+      const tx = await contract.createSubCommunity(selectedCommunityId, subName, metadataCID, description)
 
-      setTemporaryStatus('יוצר תת־קהילה על החוזה...')
+      setTemporaryStatus(t('creatingSub'))
       await tx.wait()
 
       setNewSubCommunityName('')
       setNewSubCommunityDesc('')
+      setShowCreateSubCommunityModal(false)
       const account = await getCurrentWalletAddress()
       await loadCommunities(account)
-      setTemporaryStatus(`תת־הקהילה r/${subName} נוצרה בהצלחה`)
+      setTemporaryStatus(t('subCreated', { name: subName }))
     } catch (error) {
-      console.error('שגיאה ביצירת תת־קהילה:', error)
-      alert('שגיאה ביצירת תת־קהילה. ודא שהחוזה החדש פרוס וששם התת־קהילה פנוי.')
+      console.error('Sub-community creation failed:', error)
+      alert(t('subFailed'))
     }
   }
 
@@ -491,39 +1093,36 @@ function App() {
       const contract = await getContract(true)
       const tx = await contract.joinCommunity(communityId)
 
-      setTemporaryStatus('בקשת ההצטרפות נשלחה. ממתין לאישור...')
+      setTemporaryStatus(t('joinSent'))
       await tx.wait()
 
       const account = await getCurrentWalletAddress()
       await loadCommunities(account)
       await loadModeratorInfo(communityId)
-      setTemporaryStatus('הצטרפת לקהילה בהצלחה')
+      setTemporaryStatus(t('joined'))
     } catch (error) {
-      console.error('שגיאה בהצטרפות לקהילה:', error)
-      alert('שגיאה בהצטרפות. אולי אתה כבר חבר או שהמשתמש חסום.')
+      console.error('Failed to join community:', error)
+      alert(t('joinFailed'))
     }
   }
 
-  const createPost = async () => {
-    if (!selectedCommunityId || !postTitle.trim() || !postBody.trim()) {
-      alert('נא לבחור קהילה ולמלא כותרת ותוכן לפוסט')
-      return
-    }
-
+  // Publishes the composed post: uploads any attached media, pins metadata,
+  // and sends either the normal or the flagged (review-queue) transaction.
+  const submitPost = async (flagged: boolean) => {
     const liveStatus = await getLiveMembershipStatus(selectedCommunityId)
 
     if (!liveStatus.account) {
-      alert('צריך לחבר ארנק לפני יצירת פוסט')
+      alert(t('connectFirst'))
       return
     }
 
     if (!liveStatus.isMember) {
-      alert('צריך להצטרף לקהילה לפני יצירת פוסט')
+      alert(t('joinFirst'))
       return
     }
 
     if (liveStatus.isBanned) {
-      alert('המשתמש חסום בקהילה הזאת')
+      alert(t('bannedHere'))
       return
     }
 
@@ -533,107 +1132,223 @@ function App() {
         .map((tag) => tag.trim())
         .filter(Boolean)
 
+      let imageCids: string[] = []
+      if (postImages.length > 0) {
+        setUploadingMedia(true)
+        setTemporaryStatus(t('uploadingImages'))
+        try {
+          imageCids = await Promise.all(postImages.map((file) => addFile(file)))
+        } catch (error) {
+          console.error('Image upload failed:', error)
+          alert(t('imageUploadFailed'))
+          return
+        } finally {
+          setUploadingMedia(false)
+        }
+      }
+
+      const title = postTitle.trim()
       const contentCID = await publishToIpfs({
-        title: postTitle.trim(),
+        title,
         body: postBody.trim(),
         tags,
+        images: imageCids,
       })
 
       const contract = await getContract(true)
-      const tx = await contract.createPost(selectedCommunityId, contentCID)
+      const tx = flagged
+        ? await contract.createFlaggedPost(selectedCommunityId, contentCID, title, tags.join(','))
+        : await contract.createPost(selectedCommunityId, contentCID, title, tags.join(','))
 
-      setTemporaryStatus('הפוסט נשלח לבלוקצ׳יין. ממתין לאישור...')
+      setTemporaryStatus(t('postSent'))
       await tx.wait()
 
       setPostTitle('')
       setPostBody('')
       setPostTags('')
+      setPostImages([])
       setShowCreatePost(false)
       await loadPosts(selectedCommunityId)
       await loadCommunities(liveStatus.account)
       await loadModeratorInfo(selectedCommunityId)
-      setTemporaryStatus('הפוסט פורסם בהצלחה. ניקוד הפעילות עודכן.')
+      setTemporaryStatus(flagged ? t('postSubmittedForReview') : t('postPublished'))
     } catch (error) {
-      console.error('שגיאה ביצירת פוסט:', error)
-      alert('שגיאה ביצירת הפוסט. ודא שאתה חבר בקהילה ולא חסום.')
+      console.error('Post creation failed:', error)
+      alert(t('postFailed'))
     }
+  }
+
+  const createPost = async () => {
+    if (!selectedCommunityId || !postTitle.trim() || !postBody.trim()) {
+      alert(t('fillPostFields'))
+      return
+    }
+
+    const safety = checkContentSafety(`${postTitle} ${postBody} ${postTags}`)
+
+    if (!safety.safe) {
+      setReviewPrompt({ kind: 'post', selfHarm: safety.selfHarm })
+      return
+    }
+
+    await submitPost(false)
+  }
+
+  // Optimistic vote: update the UI immediately, then reconcile with the chain.
+  const castVote = async (postId: string, direction: 1 | -1) => {
+    const current = votesByPost[postId] || { score: 0, myVote: 0 }
+    const newVote = current.myVote === direction ? 0 : direction
+
+    setVotesByPost((prev) => ({
+      ...prev,
+      [postId]: {
+        score: current.score - current.myVote + newVote,
+        myVote: newVote,
+      },
+    }))
+
+    try {
+      const contract = await getContract(true)
+      const tx = await contract.votePost(postId, newVote)
+      await tx.wait()
+    } catch (error) {
+      console.error('Vote failed:', error)
+      setVotesByPost((prev) => ({ ...prev, [postId]: current }))
+      alert(t('voteFailed'))
+    }
+  }
+
+  const runSearch = async (term: string, filter: SearchFilter) => {
+    const trimmed = term.trim()
+    if (!trimmed) return
+
+    setActiveSearchTerm(trimmed)
+    setView('search')
+    setSearchLoading(true)
+
+    const wantPosts = filter === 'all' || filter === 'posts'
+    const wantCommunities = filter === 'all' || filter === 'communities'
+    const wantUsers = filter === 'all' || filter === 'users'
+    const wantTags = filter === 'all' || filter === 'tags'
+
+    const [postResults, communityResults, userResults, tagResults] = await Promise.all([
+      wantPosts ? searchPosts(trimmed) : Promise.resolve([]),
+      wantCommunities ? searchCommunities(trimmed) : Promise.resolve([]),
+      wantUsers ? searchUsers(trimmed) : Promise.resolve([]),
+      wantTags ? searchByTag(trimmed) : Promise.resolve([]),
+    ])
+
+    const graphOffline =
+      postResults === null && communityResults === null && userResults === null && tagResults === null
+
+    if (graphOffline) {
+      // Degraded mode: filter whatever is already loaded client-side.
+      const lower = trimmed.toLowerCase()
+      const localCommunities = communities
+        .filter((community) => community.name.toLowerCase().includes(lower))
+        .map((community) => ({
+          id: community.id,
+          name: community.name,
+          description: getCommunityDescription(community),
+          membersCount: community.membersCount,
+          createdAt: '0',
+        }))
+
+      setSearchResults({
+        posts: [],
+        communities: localCommunities,
+        users: [],
+        tagPosts: [],
+        graphOffline: true,
+      })
+    } else {
+      setSearchResults({
+        posts: (postResults || []).filter((post) => !post.hidden),
+        communities: communityResults || [],
+        users: userResults || [],
+        tagPosts: (tagResults || []).filter((post) => !post.hidden),
+        graphOffline: false,
+      })
+    }
+
+    setSearchLoading(false)
   }
 
   const proposeModerator = async () => {
     if (!selectedCommunityId || !candidateAddress.trim()) {
-      alert('נא להזין כתובת משתמש למינוי')
+      alert(t('enterAddress'))
       return
     }
 
     try {
       const contract = await getContract(true)
       const tx = await contract.proposeModerator(selectedCommunityId, candidateAddress.trim())
-      setTemporaryStatus('הצעת מינוי Moderator נשלחה. דרושות 3 הסכמות.')
+      setTemporaryStatus(t('nominationSent'))
       await tx.wait()
       setCandidateAddress('')
       await loadModeratorInfo(selectedCommunityId)
     } catch (error) {
-      console.error('שגיאה בהצעת Moderator:', error)
-      alert('רק Moderator יכול להציע מינוי, והמועמד חייב להיות חבר קהילה שאינו Moderator.')
+      console.error('Moderator nomination failed:', error)
+      alert(t('nominationFailed'))
     }
   }
 
   const approveModeratorProposal = async () => {
     if (!addProposalId.trim()) {
-      alert('נא להזין Proposal ID')
+      alert(t('enterProposalId'))
       return
     }
 
     try {
       const contract = await getContract(true)
       const tx = await contract.approveModeratorProposal(addProposalId.trim())
-      setTemporaryStatus('אישור מינוי Moderator נשלח.')
+      setTemporaryStatus(t('approvalSent'))
       await tx.wait()
       setAddProposalId('')
       await loadCommunities()
       await loadModeratorInfo(selectedCommunityId)
     } catch (error) {
-      console.error('שגיאה באישור הצעת מינוי:', error)
-      alert('רק Moderator שעדיין לא אישר יכול לאשר את ההצעה.')
+      console.error('Proposal approval failed:', error)
+      alert(t('approvalFailed'))
     }
   }
 
   const proposeRemoveModerator = async () => {
     if (!selectedCommunityId || !removeTargetAddress.trim()) {
-      alert('נא להזין כתובת Moderator להסרה')
+      alert(t('enterRemovalAddress'))
       return
     }
 
     try {
       const contract = await getContract(true)
       const tx = await contract.proposeRemoveModerator(selectedCommunityId, removeTargetAddress.trim())
-      setTemporaryStatus('הצעת הסרת Moderator נשלחה. צריך לפחות חצי מה־Moderators.')
+      setTemporaryStatus(t('removalSent'))
       await tx.wait()
       setRemoveTargetAddress('')
       await loadModeratorInfo(selectedCommunityId)
     } catch (error) {
-      console.error('שגיאה בהצעת הסרה:', error)
-      alert('אפשר להסיר בהצבעה רק Moderator שמונה בעבר, לא Creator ולא Active Moderator אוטומטי.')
+      console.error('Removal proposal failed:', error)
+      alert(t('removalFailed'))
     }
   }
 
   const approveRemoveModeratorProposal = async () => {
     if (!removeProposalId.trim()) {
-      alert('נא להזין Removal Proposal ID')
+      alert(t('enterRemovalId'))
       return
     }
 
     try {
       const contract = await getContract(true)
       const tx = await contract.approveRemoveModeratorProposal(removeProposalId.trim())
-      setTemporaryStatus('אישור הסרת Moderator נשלח.')
+      setTemporaryStatus(t('removalApprovalSent'))
       await tx.wait()
       setRemoveProposalId('')
       await loadCommunities()
       await loadModeratorInfo(selectedCommunityId)
     } catch (error) {
-      console.error('שגיאה באישור הסרה:', error)
-      alert('רק Moderator שעדיין לא אישר יכול לאשר את ההסרה.')
+      console.error('Removal approval failed:', error)
+      alert(t('removalApprovalFailed'))
     }
   }
 
@@ -642,13 +1357,13 @@ function App() {
       const contract = await getContract(true)
       const tx = await contract.hidePost(postId)
 
-      setTemporaryStatus('פעולת ההסתרה נשלחה. ממתין לאישור...')
+      setTemporaryStatus(t('hideSent'))
       await tx.wait()
       await loadPosts(selectedCommunityId)
-      setTemporaryStatus('הפוסט הוסתר')
+      setTemporaryStatus(t('postHiddenToast'))
     } catch (error) {
-      console.error('שגיאה בהסתרת פוסט:', error)
-      alert('רק Moderator יכול להסתיר פוסט')
+      console.error('Failed to hide post:', error)
+      alert(t('hideFailed'))
     }
   }
 
@@ -657,13 +1372,70 @@ function App() {
       const contract = await getContract(true)
       const tx = await contract.restorePost(postId)
 
-      setTemporaryStatus('פעולת השחזור נשלחה. ממתין לאישור...')
+      setTemporaryStatus(t('restoreSent'))
       await tx.wait()
       await loadPosts(selectedCommunityId)
-      setTemporaryStatus('הפוסט שוחזר')
+      setTemporaryStatus(t('postRestoredToast'))
     } catch (error) {
-      console.error('שגיאה בשחזור פוסט:', error)
-      alert('רק Moderator יכול לשחזר פוסט')
+      console.error('Failed to restore post:', error)
+      alert(t('restoreFailed'))
+    }
+  }
+
+  const decidePendingPost = async (postId: string, approved: boolean) => {
+    try {
+      const contract = await getContract(true)
+      setTemporaryStatus(t('approvingItem'))
+      const tx = approved ? await contract.approvePendingPost(postId) : await contract.rejectPendingPost(postId)
+      await tx.wait()
+      await loadPosts(selectedCommunityId)
+      setTemporaryStatus(approved ? t('postApprovedToast') : t('postRejectedToast'))
+    } catch (error) {
+      console.error('Moderation decision failed:', error)
+      alert(t('decisionFailed'))
+    }
+  }
+
+  const decidePendingComment = async (commentId: string, approved: boolean) => {
+    try {
+      const contract = await getContract(true)
+      setTemporaryStatus(t('approvingItem'))
+      const tx = approved
+        ? await contract.approvePendingComment(commentId)
+        : await contract.rejectPendingComment(commentId)
+      await tx.wait()
+      await loadPosts(selectedCommunityId)
+      setTemporaryStatus(approved ? t('commentApprovedToast') : t('commentRejectedToast'))
+    } catch (error) {
+      console.error('Moderation decision failed:', error)
+      alert(t('decisionFailed'))
+    }
+  }
+
+  // Sends a flagged comment on-chain for review (unlike clean comments, which
+  // stay gas-free in localStorage).
+  const submitFlaggedComment = async (postId: string) => {
+    const content = (newCommentByPost[postId] || '').trim()
+
+    try {
+      let imageCid = ''
+      const image = commentImageByPost[postId]
+      if (image) {
+        setTemporaryStatus(t('uploadingImages'))
+        imageCid = await addFile(image)
+      }
+
+      const contract = await getContract(true)
+      const tx = await contract.submitFlaggedComment(postId, content, imageCid)
+      await tx.wait()
+
+      setNewCommentByPost((previous) => ({ ...previous, [postId]: '' }))
+      setCommentImageByPost((previous) => ({ ...previous, [postId]: undefined }))
+      await loadPosts(selectedCommunityId)
+      setTemporaryStatus(t('commentSubmittedForReview'))
+    } catch (error) {
+      console.error('Flagged comment submission failed:', error)
+      alert(t('commentSubmitFailed'))
     }
   }
 
@@ -671,28 +1443,41 @@ function App() {
     const content = (newCommentByPost[postId] || '').trim()
 
     if (!content) {
-      alert('נא לכתוב תגובה')
+      alert(t('writeCommentFirst'))
       return
     }
 
     const liveStatus = await getLiveMembershipStatus(selectedCommunityId)
 
     if (!liveStatus.account) {
-      alert('צריך לחבר ארנק כדי להגיב')
+      alert(t('connectToComment'))
       return
     }
 
     if (!liveStatus.isMember) {
-      alert('צריך להיות חבר בקהילה כדי להגיב')
+      alert(t('joinToComment'))
       return
     }
 
     if (liveStatus.isBanned) {
-      alert('משתמש חסום לא יכול להגיב בקהילה')
+      alert(t('bannedComment'))
+      return
+    }
+
+    const safety = checkContentSafety(content)
+    if (!safety.safe) {
+      setReviewPrompt({ kind: 'comment', postId, selfHarm: safety.selfHarm })
       return
     }
 
     try {
+      let imageCid = ''
+      const image = commentImageByPost[postId]
+      if (image) {
+        setTemporaryStatus(t('uploadingImages'))
+        imageCid = await addFile(image)
+      }
+
       const provider = getProvider()
       const signer = await provider.getSigner()
       const author = await signer.getAddress()
@@ -705,17 +1490,31 @@ function App() {
         author,
         content,
         createdAt,
+        imageCid,
       })
 
       const signature = await signer.signMessage(message)
-      const nextComments = [...comments, { postId, author, content, createdAt, message, signature }]
+      const nextComments = [...comments, { postId, author, content, createdAt, message, signature, imageCid }]
 
       saveLocalComments(nextComments)
       setNewCommentByPost((previous) => ({ ...previous, [postId]: '' }))
-      setTemporaryStatus('התגובה נשמרה off-chain ונחתמה בהצלחה')
+      setCommentImageByPost((previous) => ({ ...previous, [postId]: undefined }))
+      setTemporaryStatus(t('commentSaved'))
     } catch (error) {
-      console.error('שגיאה ביצירת תגובה off-chain:', error)
-      alert('שגיאה בחתימת התגובה. חתימה לא עולה gas, אבל צריך לאשר אותה ב-MetaMask.')
+      console.error('Off-chain comment failed:', error)
+      alert(t('commentSignFailed'))
+    }
+  }
+
+  const confirmReviewSubmission = async () => {
+    if (!reviewPrompt) return
+    const prompt = reviewPrompt
+    setReviewPrompt(null)
+
+    if (prompt.kind === 'post') {
+      await submitPost(true)
+    } else {
+      await submitFlaggedComment(prompt.postId)
     }
   }
 
@@ -732,19 +1531,35 @@ function App() {
     return `${address.slice(0, 6)}...${address.slice(-4)}`
   }
 
+  const formatUser = (address: string) => {
+    return usernamesCache[address] || formatAddress(address)
+  }
+
   const formatDate = (timestamp: string | number) => {
     const value = Number(timestamp)
-    if (!value) return 'Unknown time'
+    if (!value) return '-'
 
     const date = value > 10_000_000_000 ? new Date(value) : new Date(value * 1000)
-    return new Intl.DateTimeFormat('he-IL', {
+    return new Intl.DateTimeFormat(lang === 'he' ? 'he-IL' : 'en-US', {
       dateStyle: 'short',
       timeStyle: 'short',
     }).format(date)
   }
 
+  const formatEth = (wei: string) => {
+    try {
+      return `${Number(ethers.formatEther(wei)).toFixed(6)} ETH`
+    } catch {
+      return '0 ETH'
+    }
+  }
+
   const commentsForPost = (postId: string) => {
     return comments.filter((comment) => comment.postId === postId)
+  }
+
+  const onChainCommentsForPost = (postId: string) => {
+    return onChainComments.filter((comment) => comment.postId === postId)
   }
 
   const roleLabel = (role?: ModeratorRole) => {
@@ -755,20 +1570,88 @@ function App() {
     return 'MOD'
   }
 
+  const notifLabel = (type: string) => {
+    const key = `notif_${type}` as TranslationKey
+    const label = t(key)
+    return label === key ? type : label
+  }
+
+  const activityLabel = (type: string) => {
+    const key = `act_${type}` as TranslationKey
+    const label = t(key)
+    return label === key ? type : label
+  }
+
+  const openCommunity = (communityId: string) => {
+    setSelectedCommunityId(communityId)
+    setView('community')
+  }
+
+  const openProfile = (address: string) => {
+    setProfileAddress(address)
+    setView('profile')
+  }
+
+  const usernamePolicyError = usernameInput.trim() ? validateUsername(usernameInput.trim()) : null
+
+  const renderVoteBox = (postId: string) => {
+    const voteInfo = votesByPost[postId] || { score: 0, myVote: 0 }
+
+    return (
+      <div className="post-vote-box">
+        <button
+          className={`vote-button ${voteInfo.myVote === 1 ? 'voted-up' : ''}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            castVote(postId, 1)
+          }}
+          aria-label="Upvote"
+        >
+          ▲
+        </button>
+        <strong className={voteInfo.score > 0 ? 'score-positive' : voteInfo.score < 0 ? 'score-negative' : ''}>
+          {voteInfo.score}
+        </strong>
+        <button
+          className={`vote-button ${voteInfo.myVote === -1 ? 'voted-down' : ''}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            castVote(postId, -1)
+          }}
+          aria-label="Downvote"
+        >
+          ▼
+        </button>
+      </div>
+    )
+  }
+
+  const renderPostImages = (postId: string, images?: string[]) => {
+    if (!images || images.length === 0) return null
+
+    return (
+      <div className="post-images">
+        {images.map((cid) => (
+          <img className="post-image" key={`${postId}-${cid}`} src={ipfsUrl(cid)} alt="" loading="lazy" />
+        ))}
+      </div>
+    )
+  }
+
   const renderCommunityButton = (community: Community, depth = 0) => {
     const children = communitiesByParent[community.id] || []
 
     return (
       <div key={community.id}>
         <button
-          className={`community-item ${selectedCommunityId === community.id ? 'active' : ''}`}
-          style={{ paddingLeft: `${0.75 + depth * 1.1}rem` }}
-          onClick={() => setSelectedCommunityId(community.id)}
+          className={`community-item ${view === 'community' && selectedCommunityId === community.id ? 'active' : ''}`}
+          style={{ paddingInlineStart: `${0.75 + depth * 1.1}rem` }}
+          onClick={() => openCommunity(community.id)}
         >
           <span className="community-avatar">{depth > 0 ? '↳' : 'r/'}</span>
           <span className="community-main">
             <strong>r/{community.name}</strong>
-            <small>{community.membersCount} members</small>
+            <small>{t('membersLabel', { count: community.membersCount })}</small>
           </span>
           {community.isModerator && <span className="mini-badge mod">MOD</span>}
         </button>
@@ -778,384 +1661,967 @@ function App() {
     )
   }
 
+  const renderTrendingFeed = () => (
+    <>
+      <section className="panel community-hero">
+        <div>
+          <span className="eyebrow">{t('home')}</span>
+          <h2>{t('trending')}</h2>
+          <p>
+            {t('trendingBody')}
+            {trendingSource === 'chain' && t('trendingOffline')}
+          </p>
+        </div>
+      </section>
+
+      <section className="feed-list">
+        {rankedTrending.length === 0 ? (
+          <div className="empty-state panel">
+            <h3>{t('noPostsYet')}</h3>
+            <p>{t('noTrendingBody')}</p>
+          </div>
+        ) : (
+          rankedTrending.map((post) => {
+            const metadata = getPostMetadata(post)
+            const title = post.title || metadata.title
+            const tags = post.tags.length > 0 ? post.tags : metadata.tags || []
+
+            return (
+              <article className="post-card panel" key={`trending-${post.id}`}>
+                {renderVoteBox(post.id)}
+                <button className="post-content-button" onClick={() => openCommunity(post.communityId)}>
+                  <div className="post-main-content">
+                    <div className="post-meta-line">
+                      <span>r/{post.communityName}</span>
+                      <span>·</span>
+                      <span>{formatUser(post.author)}</span>
+                      <span>·</span>
+                      <span>{formatDate(post.createdAt)}</span>
+                    </div>
+                    <h3>{title}</h3>
+                    <p>{metadata.body}</p>
+                    {renderPostImages(post.id, metadata.images)}
+                    {tags.length > 0 && (
+                      <div className="tag-row">
+                        {tags.map((tag) => (
+                          <span key={`trending-${post.id}-${tag}`}>#{tag}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </button>
+              </article>
+            )
+          })
+        )}
+      </section>
+    </>
+  )
+
+  const renderPendingReviewPanel = () => {
+    if (!selectedCommunity?.isModerator) return null
+    if (pendingPosts.length === 0 && pendingComments.length === 0) return null
+
+    return (
+      <section className="panel secondary-create-card review-panel">
+        <div className="section-heading">
+          <span className="eyebrow">{t('pendingReviewTitle')}</span>
+          <p className="muted-text">{t('pendingReviewBody')}</p>
+        </div>
+
+        {pendingPosts.length > 0 && (
+          <div className="review-group">
+            <h3>{t('pendingPostsTitle')}</h3>
+            {pendingPosts.map((post) => {
+              const metadata = getPostMetadata(post)
+              return (
+                <div className="review-item" key={`pending-post-${post.id}`}>
+                  <div className="review-item-body">
+                    <strong>{metadata.title}</strong>
+                    <p>{metadata.body}</p>
+                    {renderPostImages(post.id, metadata.images)}
+                    <small>
+                      {formatUser(post.author)} · {formatDate(post.createdAt)}
+                    </small>
+                  </div>
+                  <div className="review-actions">
+                    <button className="primary-button" onClick={() => decidePendingPost(post.id, true)}>
+                      {t('approve')}
+                    </button>
+                    <button className="danger-button" onClick={() => decidePendingPost(post.id, false)}>
+                      {t('reject')}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {pendingComments.length > 0 && (
+          <div className="review-group">
+            <h3>{t('pendingCommentsTitle')}</h3>
+            {pendingComments.map((comment) => (
+              <div className="review-item" key={`pending-comment-${comment.id}`}>
+                <div className="review-item-body">
+                  <p>{comment.content}</p>
+                  {comment.imageCid && <img className="post-image" src={ipfsUrl(comment.imageCid)} alt="" />}
+                  <small>
+                    {formatUser(comment.author)} · {formatDate(comment.createdAt)} · Post #{comment.postId}
+                  </small>
+                </div>
+                <div className="review-actions">
+                  <button className="primary-button" onClick={() => decidePendingComment(comment.id, true)}>
+                    {t('approve')}
+                  </button>
+                  <button className="danger-button" onClick={() => decidePendingComment(comment.id, false)}>
+                    {t('reject')}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    )
+  }
+
+  const renderCommunityFeed = () => {
+    if (!selectedCommunity) {
+      return (
+        <section className="empty-state panel">
+          <h2>{t('pickCommunity')}</h2>
+          <p>{t('pickCommunityBody')}</p>
+        </section>
+      )
+    }
+
+    return (
+      <>
+        <section className="community-hero panel">
+          <div>
+            <span className="eyebrow">{t('community')}</span>
+            <h2>r/{selectedCommunity.name}</h2>
+            <p>{getCommunityDescription(selectedCommunity)}</p>
+            <div className="meta-row">
+              <span>{t('membersLabel', { count: selectedCommunity.membersCount })}</span>
+              <span>{t('creatorLabel', { name: formatUser(selectedCommunity.creator) })}</span>
+              {selectedCommunity.parentCommunityId !== '0' && <span className="badge info">{t('subCommunityBadge')}</span>}
+              {selectedCommunity.isMember && <span className="badge success">{t('memberBadge')}</span>}
+              {selectedCommunity.isModerator && (
+                <span className="badge warning">{roleLabel(selectedCommunity.moderatorRole)}</span>
+              )}
+              {selectedCommunity.isBanned && <span className="badge danger">{t('bannedBadge')}</span>}
+            </div>
+          </div>
+
+          <div className="hero-actions">
+            {!selectedCommunity.isMember && !selectedCommunity.isBanned && (
+              <button className="primary-button" onClick={() => joinCommunity(selectedCommunity.id)}>
+                {t('join')}
+              </button>
+            )}
+            <button className="secondary-button" onClick={() => setShowCreatePost((previous) => !previous)}>
+              {showCreatePost ? t('closeEditor') : t('writePost')}
+            </button>
+            <button className="ghost-button" onClick={() => setShowCreateSubCommunityModal(true)}>
+              {t('subCommunityButton')}
+            </button>
+          </div>
+        </section>
+
+        {renderPendingReviewPanel()}
+
+        {showCreatePost && (
+          <section className="panel create-post-card secondary-create-card">
+            <div className="section-heading row-heading">
+              <div>
+                <span className="eyebrow">{t('newPostEyebrow')}</span>
+                <h2>{t('publishPost')}</h2>
+              </div>
+              <span className="counter-pill">{t('activityPill')}</span>
+            </div>
+
+            {!selectedCommunity.isMember && <p className="warning-text">{t('joinBeforePosting')}</p>}
+
+            <input
+              type="text"
+              placeholder={t('postTitlePh')}
+              value={postTitle}
+              onChange={(event) => setPostTitle(event.target.value)}
+            />
+            <textarea
+              className="post-body-input"
+              placeholder={t('postBodyPh')}
+              value={postBody}
+              onChange={(event) => setPostBody(event.target.value)}
+            />
+            <input
+              type="text"
+              placeholder={t('postTagsPh')}
+              value={postTags}
+              onChange={(event) => setPostTags(event.target.value)}
+            />
+
+            <label className="file-input-label">
+              {t('attachImages')}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                multiple
+                onChange={(event) => {
+                  const files = Array.from(event.target.files || [])
+                  setPostImages((previous) => [...previous, ...files])
+                  event.target.value = ''
+                }}
+              />
+            </label>
+
+            {postImages.length > 0 && (
+              <div className="image-previews">
+                {postImages.map((file, index) => (
+                  <div className="image-preview" key={`${file.name}-${index}`}>
+                    <img src={URL.createObjectURL(file)} alt={file.name} />
+                    <button
+                      className="ghost-button"
+                      onClick={() => setPostImages((previous) => previous.filter((_, i) => i !== index))}
+                    >
+                      {t('removeImage')}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="form-footer">
+              <small>{t('storedOnIpfs')}</small>
+              <button className="primary-button" disabled={uploadingMedia} onClick={createPost}>
+                {uploadingMedia ? t('uploadingImages') : t('publish')}
+              </button>
+            </div>
+          </section>
+        )}
+
+        <section className="feed-list">
+          <div className="feed-title-row">
+            <h2>{t('feed')}</h2>
+            <span>{t('postsCount', { count: visiblePosts.length })}</span>
+          </div>
+
+          {visiblePosts.length === 0 ? (
+            <div className="empty-state panel">
+              <h3>{t('noPostsYet')}</h3>
+              <p>{t('noPostsBody')}</p>
+            </div>
+          ) : (
+            visiblePosts.map((post) => {
+              const metadata = getPostMetadata(post)
+              const postComments = commentsForPost(post.id)
+              const chainComments = onChainCommentsForPost(post.id)
+              const totalComments = postComments.length + chainComments.length
+              const isSelected = selectedPost?.id === post.id
+
+              return (
+                <article
+                  className={`post-card panel ${post.hidden && !post.pending ? 'hidden-post' : ''} ${isSelected ? 'selected' : ''}`}
+                  key={post.id}
+                >
+                  {renderVoteBox(post.id)}
+                  <div className="post-card-body">
+                    <button className="post-content-button" onClick={() => setSelectedPostId(post.id)}>
+                      <div className="post-main-content">
+                        <div className="post-meta-line">
+                          <span>r/{selectedCommunity.name}</span>
+                          <span>·</span>
+                          <span>{formatUser(post.author)}</span>
+                          <span>·</span>
+                          <span>{formatDate(post.createdAt)}</span>
+                        </div>
+                        <h3>{metadata.title}</h3>
+                        <p>{metadata.body}</p>
+                        {renderPostImages(post.id, metadata.images)}
+                        {metadata.tags && metadata.tags.length > 0 && (
+                          <div className="tag-row">
+                            {metadata.tags.map((tag) => (
+                              <span key={`${post.id}-${tag}`}>#{tag}</span>
+                            ))}
+                          </div>
+                        )}
+                        <div className="post-actions-line">
+                          <span>{t('commentsCount', { count: totalComments })}</span>
+                          <span>CID: {post.contentCID.slice(0, 18)}...</span>
+                          {post.pending && <span className="badge warning">{t('pendingBadge')}</span>}
+                          {post.rejected && <span className="badge danger">{t('rejectedBadge')}</span>}
+                          {post.hidden && !post.pending && !post.rejected && (
+                            <span className="badge danger">{t('hiddenBadge')}</span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+
+                    {selectedCommunity.isModerator && !post.pending && !post.rejected && (
+                      <div className="moderator-actions">
+                        {post.hidden ? (
+                          <button className="ghost-button" onClick={() => restorePost(post.id)}>
+                            {t('restorePost')}
+                          </button>
+                        ) : (
+                          <button className="danger-button" onClick={() => hidePost(post.id)}>
+                            {t('hidePostButton')}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {isSelected && (
+                      <div className="comments-box">
+                        <h4>{t('offChainComments')}</h4>
+                        {totalComments === 0 ? (
+                          <p className="muted-text">{t('noComments')}</p>
+                        ) : (
+                          <div className="comments-list">
+                            {chainComments.map((comment) => (
+                              <div className="comment-item" key={`chain-${comment.id}`}>
+                                <p>{comment.content}</p>
+                                {comment.imageCid && <img className="post-image" src={ipfsUrl(comment.imageCid)} alt="" />}
+                                <small>
+                                  {formatUser(comment.author)} · {formatDate(comment.createdAt)} · {t('onChainComment')}
+                                </small>
+                              </div>
+                            ))}
+                            {postComments.map((comment, index) => (
+                              <div className="comment-item" key={`${comment.signature}-${index}`}>
+                                <p>{comment.content}</p>
+                                {comment.imageCid && <img className="post-image" src={ipfsUrl(comment.imageCid)} alt="" />}
+                                <small>
+                                  {formatUser(comment.author)} · {formatDate(comment.createdAt)} · {t('signatureLabel')}{' '}
+                                  {isCommentSignatureValid(comment) ? t('signatureValid') : t('signatureInvalid')}
+                                </small>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        <textarea
+                          placeholder={t('commentPh')}
+                          value={newCommentByPost[post.id] || ''}
+                          onChange={(event) =>
+                            setNewCommentByPost((previous) => ({ ...previous, [post.id]: event.target.value }))
+                          }
+                        />
+                        <label className="file-input-label">
+                          {t('attachCommentImage')}
+                          {commentImageByPost[post.id] && <span> ({commentImageByPost[post.id]?.name})</span>}
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/gif,image/webp"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0]
+                              setCommentImageByPost((previous) => ({ ...previous, [post.id]: file }))
+                              event.target.value = ''
+                            }}
+                          />
+                        </label>
+                        <button className="secondary-button full" onClick={() => createOffChainComment(post.id)}>
+                          {t('sendComment')}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              )
+            })
+          )}
+        </section>
+      </>
+    )
+  }
+
+  const renderSearchView = () => {
+    const filters: { key: SearchFilter; label: string }[] = [
+      { key: 'all', label: t('filterAll') },
+      { key: 'posts', label: t('filterPosts') },
+      { key: 'communities', label: t('filterCommunities') },
+      { key: 'users', label: t('filterUsers') },
+      { key: 'tags', label: t('filterTags') },
+    ]
+
+    return (
+      <main className="page-view">
+        <section className="panel page-card">
+          <span className="eyebrow">{t('searchTitle')}</span>
+          <h2>{t('resultsFor', { term: activeSearchTerm })}</h2>
+
+          <div className="filter-chips">
+            {filters.map((filter) => (
+              <button
+                key={filter.key}
+                className={`chip ${searchFilter === filter.key ? 'active' : ''}`}
+                onClick={() => {
+                  setSearchFilter(filter.key)
+                  runSearch(activeSearchTerm, filter.key)
+                }}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+
+          {searchResults?.graphOffline && <p className="warning-text">{t('graphOfflineSearch')}</p>}
+
+          {searchLoading ? (
+            <p className="muted-text">{t('searching')}</p>
+          ) : !searchResults ? (
+            <p className="muted-text">{t('typeToSearch')}</p>
+          ) : (
+            <>
+              {(searchFilter === 'all' || searchFilter === 'communities') && searchResults.communities.length > 0 && (
+                <div className="result-group">
+                  <h3>{t('filterCommunities')}</h3>
+                  {searchResults.communities.map((community) => (
+                    <button
+                      className="result-row"
+                      key={`sc-${community.id}`}
+                      onClick={() => openCommunity(community.id)}
+                    >
+                      <strong>r/{community.name}</strong>
+                      <small>
+                        {community.description} · {t('membersLabel', { count: community.membersCount })}
+                      </small>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {(searchFilter === 'all' || searchFilter === 'posts') && searchResults.posts.length > 0 && (
+                <div className="result-group">
+                  <h3>{t('filterPosts')}</h3>
+                  {searchResults.posts.map((post) => (
+                    <button className="result-row" key={`sp-${post.id}`} onClick={() => openCommunity(post.community.id)}>
+                      <strong>{post.title}</strong>
+                      <small>
+                        r/{post.community.name} · {t('byAuthor', { name: post.author.username || formatAddress(post.author.id) })} ·{' '}
+                        {post.score}
+                        {post.tags.length > 0 ? ` · ${post.tags.map((tag) => `#${tag}`).join(' ')}` : ''}
+                      </small>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {(searchFilter === 'all' || searchFilter === 'tags') && searchResults.tagPosts.length > 0 && (
+                <div className="result-group">
+                  <h3>{t('taggedPosts', { term: activeSearchTerm })}</h3>
+                  {searchResults.tagPosts.map((post) => (
+                    <button className="result-row" key={`st-${post.id}`} onClick={() => openCommunity(post.community.id)}>
+                      <strong>{post.title}</strong>
+                      <small>
+                        r/{post.community.name} · {t('byAuthor', { name: post.author.username || formatAddress(post.author.id) })} ·{' '}
+                        {post.score}
+                      </small>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {(searchFilter === 'all' || searchFilter === 'users') && searchResults.users.length > 0 && (
+                <div className="result-group">
+                  <h3>{t('filterUsers')}</h3>
+                  {searchResults.users.map((user) => (
+                    <button className="result-row" key={`su-${user.id}`} onClick={() => openProfile(user.id)}>
+                      <strong>@{user.username || formatAddress(user.id)}</strong>
+                      <small>
+                        {t('statPosts')}: {user.postCount} · {t('statCommunities')}: {user.communitiesJoined}
+                      </small>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {searchResults.posts.length === 0 &&
+                searchResults.communities.length === 0 &&
+                searchResults.users.length === 0 &&
+                searchResults.tagPosts.length === 0 && <p className="muted-text">{t('noResults')}</p>}
+            </>
+          )}
+        </section>
+      </main>
+    )
+  }
+
+  const renderProfileView = () => {
+    const isOwnProfile = profileAddress.toLowerCase() === walletAddress.toLowerCase()
+    const displayName =
+      (isOwnProfile && username) || usernamesCache[profileAddress] || profileData?.username || formatAddress(profileAddress)
+
+    return (
+      <main className="page-view">
+        <section className="panel page-card">
+          <div className="row-heading">
+            <div>
+              <span className="eyebrow">{isOwnProfile ? t('personalArea') : t('userProfile')}</span>
+              <h2>@{displayName}</h2>
+              <p className="muted-text">{profileAddress}</p>
+            </div>
+            {isOwnProfile && (
+              <button
+                className="ghost-button"
+                onClick={() => {
+                  setUsernameInput('')
+                  setShowChangeUsernameModal(true)
+                }}
+              >
+                {t('changeUsernameButton', { fee: USERNAME_CHANGE_FEE_ETH })}
+              </button>
+            )}
+          </div>
+
+          {profileGraphOffline ? (
+            <p className="warning-text">{t('graphOfflineProfile')}</p>
+          ) : (
+            <div className="stats-row">
+              <div className="stat-box">
+                <strong>{profileData?.postCount ?? 0}</strong>
+                <small>{t('statPosts')}</small>
+              </div>
+              <div className="stat-box">
+                <strong>{profileData?.communitiesJoined ?? 0}</strong>
+                <small>{t('statCommunities')}</small>
+              </div>
+              <div className="stat-box">
+                <strong>{Number(profileData?.totalGasUsed ?? '0').toLocaleString()}</strong>
+                <small>{t('statGas')}</small>
+              </div>
+              <div className="stat-box">
+                <strong>{formatEth(profileData?.totalFeesWei ?? '0')}</strong>
+                <small>{t('statFees')}</small>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {isOwnProfile && (
+          <section className="panel page-card">
+            <div className="row-heading">
+              <h3>
+                {t('notificationsTitle')}{' '}
+                {unreadNotificationsCount > 0 && (
+                  <span className="badge warning">{t('newBadge', { count: unreadNotificationsCount })}</span>
+                )}
+              </h3>
+              {notifications.length > 0 && (
+                <button className="ghost-button" onClick={markAllNotificationsRead}>
+                  {t('markAllRead')}
+                </button>
+              )}
+            </div>
+            <p className="muted-text">{t('commentReplyNote')}</p>
+
+            {notifications.length === 0 ? (
+              <p className="muted-text">{t('noNotifications')}</p>
+            ) : (
+              <div className="notification-list">
+                {notifications.map((notification) => {
+                  const isRead = readNotificationIds.includes(notification.id)
+                  return (
+                    <div className={`notification-item ${isRead ? '' : 'unread'}`} key={notification.id}>
+                      <strong>{notifLabel(notification.type)}</strong>
+                      <small>
+                        {notification.detail && `"${notification.detail}" · `}
+                        {notification.actorLabel &&
+                          `${notification.actorLabel.startsWith('0x') ? formatUser(notification.actorLabel) : notification.actorLabel} · `}
+                        {formatDate(notification.timestamp)}
+                      </small>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {!profileGraphOffline && (
+          <section className="panel page-card">
+            <h3>{t('recentActivity')}</h3>
+            {profileActivities.length === 0 ? (
+              <p className="muted-text">{t('noActivity')}</p>
+            ) : (
+              <div className="activity-list">
+                {profileActivities.map((activity) => (
+                  <div className="activity-item" key={activity.id}>
+                    <strong>{activityLabel(activity.type)}</strong>
+                    <small>
+                      {activity.detail && `${activity.detail} · `}
+                      {t('gasLine', { gas: Number(activity.gasUsed).toLocaleString() })} · {formatEth(activity.feeWei)} ·{' '}
+                      {formatDate(activity.timestamp)}
+                    </small>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+      </main>
+    )
+  }
+
   return (
-    <div className="app-shell">
+    <div className="app-shell" dir={lang === 'he' ? 'rtl' : 'ltr'}>
       <header className="topbar">
-        <div className="brand-block">
+        <button className="brand-block brand-button" onClick={() => setView('home')}>
           <div className="brand-mark">R</div>
           <div>
             <h1>Reppit</h1>
-            <p>Decentralized forum with community governance</p>
+            <p>{t('brandTagline')}</p>
           </div>
-        </div>
+        </button>
 
         <div className="search-shell">
           <span>⌕</span>
           <input
             type="search"
-            placeholder="Search communities, posts, tags..."
+            placeholder={t('searchPlaceholder')}
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                runSearch(searchQuery, searchFilter)
+              }
+            }}
           />
         </div>
 
-        <div className="wallet-panel">
-          {walletAddress ? (
-            <>
-              <span className="status-dot" />
-              <span className="wallet-label">Connected</span>
-              <code>{formatAddress(walletAddress)}</code>
-            </>
-          ) : (
-            <button className="primary-button" onClick={connectWallet}>Connect Wallet</button>
+        <div className="topbar-actions">
+          <div className="lang-toggle">
+            <button className={`chip ${lang === 'en' ? 'active' : ''}`} onClick={() => setLang('en')}>
+              EN
+            </button>
+            <button className={`chip ${lang === 'he' ? 'active' : ''}`} onClick={() => setLang('he')}>
+              עב
+            </button>
+          </div>
+
+          {walletAddress && (
+            <button
+              className={`ghost-button topbar-nav-button ${view === 'profile' ? 'active-nav' : ''}`}
+              onClick={() => openProfile(walletAddress)}
+            >
+              @{username || formatAddress(walletAddress)}
+              {unreadNotificationsCount > 0 && <span className="notification-badge">{unreadNotificationsCount}</span>}
+            </button>
           )}
+
+          <div className="wallet-panel">
+            {walletAddress ? (
+              <>
+                <span className="status-dot" />
+                <span className="wallet-label">{t('connected')}</span>
+                <code>{formatAddress(walletAddress)}</code>
+              </>
+            ) : (
+              <button className="primary-button" onClick={connectWallet}>
+                {t('connectWallet')}
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
+      {modNotification && <div className="toast-message mod-alert">{modNotification}</div>}
       {statusMessage && <div className="toast-message">{statusMessage}</div>}
 
       {!walletAddress ? (
         <main className="landing-card">
-          <span className="eyebrow">Web3 forum</span>
-          <h2>קהילות, תתי־קהילות ו־Moderators לפי פעילות</h2>
-          <p>
-            החוזה החדש תומך ביוצר קהילה כ־Moderator ראשון, שני Active Moderators אוטומטיים,
-            מינוי Moderators בהסכמת 3 Moderators, והסרה של Appointed Moderator לפי הצבעה של לפחות חצי מה־Moderators.
-          </p>
-          <button className="primary-button large" onClick={connectWallet}>התחבר עם MetaMask</button>
+          <span className="eyebrow">{t('landingEyebrow')}</span>
+          <h2>{t('landingTitle')}</h2>
+          <p>{t('landingBody')}</p>
+          <button className="primary-button large" onClick={connectWallet}>
+            {t('connectWithMetaMask')}
+          </button>
         </main>
       ) : (
-        <main className="forum-layout">
-          <aside className="sidebar">
-            <section className="panel create-community-panel compact-panel">
-              <div className="section-heading">
-                <span className="eyebrow">Create</span>
-                <h2>קהילה ראשית</h2>
-              </div>
+        <>
+          {view === 'search' && renderSearchView()}
+          {view === 'profile' && renderProfileView()}
+          {(view === 'home' || view === 'community') && (
+            <main className="forum-layout">
+              <aside className="sidebar">
+                <section className="panel communities-panel">
+                  <div className="section-heading row-heading">
+                    <div>
+                      <span className="eyebrow">{t('subForums')}</span>
+                      <h2>{t('communities')}</h2>
+                    </div>
+                    <span className="counter-pill">{communities.length}</span>
+                  </div>
+
+                  <button
+                    className="primary-button full action-trigger"
+                    onClick={() => setShowCreateCommunityModal(true)}
+                  >
+                    {t('newCommunity')}
+                  </button>
+
+                  {communities.length === 0 ? (
+                    <p className="muted-text">{t('noCommunities')}</p>
+                  ) : (
+                    <div className="community-list">{rootCommunities.map((community) => renderCommunityButton(community))}</div>
+                  )}
+                </section>
+              </aside>
+
+              <section className="main-feed">{view === 'home' ? renderTrendingFeed() : renderCommunityFeed()}</section>
+
+              <aside className="details-sidebar">
+                {view === 'community' ? (
+                  <>
+                    <section className="panel details-card governance-card">
+                      <span className="eyebrow">{t('governance')}</span>
+                      {selectedCommunity ? (
+                        <>
+                          <h2>{t('moderatorsTitle')}</h2>
+                          <p>{t('governanceBody')}</p>
+
+                          <div className="mod-list">
+                            {moderators.length === 0 ? (
+                              <p className="muted-text">{t('noModData')}</p>
+                            ) : (
+                              moderators.map((moderator) => (
+                                <div className="mod-row" key={moderator.address}>
+                                  <div>
+                                    <strong>{formatUser(moderator.address)}</strong>
+                                    <small>
+                                      {roleLabel(moderator.role)} · {t('scoreLabel', { score: moderator.score })}
+                                    </small>
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+
+                          <div className="active-box">
+                            <strong>{t('topActive')}</strong>
+                            {topActiveUsers.length === 0 ? (
+                              <small>{t('noActiveMods')}</small>
+                            ) : (
+                              topActiveUsers.map((address) => <small key={address}>{formatUser(address)}</small>)
+                            )}
+                          </div>
+
+                          {selectedCommunity.isModerator && (
+                            <button
+                              className="ghost-button full action-trigger"
+                              onClick={() => setShowModeratorActionsModal(true)}
+                            >
+                              {t('moderatorActions')}
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <p className="muted-text">{t('pickCommunityGov')}</p>
+                      )}
+                    </section>
+
+                    <section className="panel details-card">
+                      <span className="eyebrow">{t('postDetails')}</span>
+                      {selectedPost ? (
+                        <>
+                          <h2>{getPostMetadata(selectedPost).title}</h2>
+                          <p>{getPostMetadata(selectedPost).body}</p>
+                          <div className="details-grid">
+                            <span>{t('postIdLabel')}</span>
+                            <strong>#{selectedPost.id}</strong>
+                            <span>{t('authorLabel')}</span>
+                            <strong>{formatUser(selectedPost.author)}</strong>
+                            <span>{t('scoreDetailLabel')}</span>
+                            <strong>{votesByPost[selectedPost.id]?.score ?? 0}</strong>
+                            <span>{t('commentsLabel')}</span>
+                            <strong>{commentsForPost(selectedPost.id).length + onChainCommentsForPost(selectedPost.id).length}</strong>
+                            <span>{t('storageLabel')}</span>
+                            <strong>IPFS</strong>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="muted-text">{t('pickPost')}</p>
+                      )}
+                    </section>
+                  </>
+                ) : (
+                  <section className="panel details-card">
+                    <span className="eyebrow">{t('aboutEyebrow')}</span>
+                    <h2>{t('aboutTrendingTitle')}</h2>
+                    <p>{t('aboutTrendingBody')}</p>
+                    <p className="muted-text">{t('aboutTrendingGraph')}</p>
+                  </section>
+                )}
+              </aside>
+            </main>
+          )}
+
+          {showUsernameModal && (
+            <Modal title={t('chooseUsername')} dismissible={false}>
+              <p>{t('usernameIntro')}</p>
               <input
                 type="text"
-                placeholder="שם קהילה, למשל blockchain"
+                placeholder={t('usernamePh')}
+                value={usernameInput}
+                onChange={(event) => setUsernameInput(event.target.value)}
+              />
+              {usernamePolicyError && <p className="warning-text">{t(`username_${usernamePolicyError}` as TranslationKey)}</p>}
+              {!usernamePolicyError && usernameInput.trim() && usernameAvailable !== null && (
+                <p className={usernameAvailable ? 'muted-text' : 'warning-text'}>
+                  {usernameAvailable ? t('usernameAvailable') : t('usernameTaken')}
+                </p>
+              )}
+              <button
+                className="primary-button full"
+                disabled={!usernameInput.trim() || Boolean(usernamePolicyError) || usernameAvailable === false}
+                onClick={submitUsername}
+              >
+                {t('confirmUsername')}
+              </button>
+            </Modal>
+          )}
+
+          {showChangeUsernameModal && (
+            <Modal
+              title={t('changeUsernameTitle')}
+              onClose={() => {
+                setShowChangeUsernameModal(false)
+                setUsernameInput('')
+              }}
+            >
+              <p>{t('changeUsernameBody', { fee: USERNAME_CHANGE_FEE_ETH, old: username })}</p>
+              <input
+                type="text"
+                placeholder={t('newUsernamePh')}
+                value={usernameInput}
+                onChange={(event) => setUsernameInput(event.target.value)}
+              />
+              {usernamePolicyError && <p className="warning-text">{t(`username_${usernamePolicyError}` as TranslationKey)}</p>}
+              {!usernamePolicyError && usernameInput.trim() && usernameAvailable !== null && (
+                <p className={usernameAvailable ? 'muted-text' : 'warning-text'}>
+                  {usernameAvailable ? t('usernameAvailable') : t('usernameTaken')}
+                </p>
+              )}
+              <button
+                className="primary-button full"
+                disabled={!usernameInput.trim() || Boolean(usernamePolicyError) || usernameAvailable === false}
+                onClick={submitUsernameChange}
+              >
+                {t('payAndChange', { fee: USERNAME_CHANGE_FEE_ETH })}
+              </button>
+            </Modal>
+          )}
+
+          {showCreateCommunityModal && (
+            <Modal title={t('newCommunityTitle')} onClose={() => setShowCreateCommunityModal(false)}>
+              <input
+                type="text"
+                placeholder={t('communityNamePh')}
                 value={newCommunityName}
                 onChange={(event) => setNewCommunityName(event.target.value)}
               />
+              {newCommunityName.trim() && !isValidCommunityName(newCommunityName.trim()) && (
+                <p className="warning-text">{t('communityNameInvalid')}</p>
+              )}
               <textarea
-                placeholder="תיאור קצר לקהילה"
+                placeholder={t('communityDescPh')}
                 value={newCommunityDesc}
                 onChange={(event) => setNewCommunityDesc(event.target.value)}
               />
-              <button className="primary-button full" onClick={createCommunity}>צור קהילה</button>
-            </section>
+              <button className="primary-button full" onClick={createCommunity}>
+                {t('createCommunityButton')}
+              </button>
+            </Modal>
+          )}
 
-            <section className="panel communities-panel">
-              <div className="section-heading row-heading">
-                <div>
-                  <span className="eyebrow">Sub forums</span>
-                  <h2>קהילות</h2>
-                </div>
-                <span className="counter-pill">{communities.length}</span>
+          {showCreateSubCommunityModal && selectedCommunity && (
+            <Modal
+              title={t('subCommunityTitle', { name: selectedCommunity.name })}
+              onClose={() => setShowCreateSubCommunityModal(false)}
+            >
+              <input
+                type="text"
+                placeholder={t('subNamePh')}
+                value={newSubCommunityName}
+                onChange={(event) => setNewSubCommunityName(event.target.value)}
+              />
+              {newSubCommunityName.trim() && !isValidCommunityName(newSubCommunityName.trim()) && (
+                <p className="warning-text">{t('communityNameInvalid')}</p>
+              )}
+              <textarea
+                placeholder={t('subDescPh')}
+                value={newSubCommunityDesc}
+                onChange={(event) => setNewSubCommunityDesc(event.target.value)}
+              />
+              <button className="ghost-button full" onClick={createSubCommunity}>
+                {t('createSubButton')}
+              </button>
+            </Modal>
+          )}
+
+          {showModeratorActionsModal && selectedCommunity && (
+            <Modal title={t('moderatorActions')} onClose={() => setShowModeratorActionsModal(false)}>
+              <div className="governance-tools">
+                <input
+                  type="text"
+                  placeholder={t('nominatePh')}
+                  value={candidateAddress}
+                  onChange={(event) => setCandidateAddress(event.target.value)}
+                />
+                <button className="ghost-button full" onClick={proposeModerator}>
+                  {t('openNomination')}
+                </button>
+
+                <input
+                  type="text"
+                  placeholder={t('proposalIdPh')}
+                  value={addProposalId}
+                  onChange={(event) => setAddProposalId(event.target.value)}
+                />
+                <button className="secondary-button full" onClick={approveModeratorProposal}>
+                  {t('approveNomination')}
+                </button>
+
+                <input
+                  type="text"
+                  placeholder={t('removeAddrPh')}
+                  value={removeTargetAddress}
+                  onChange={(event) => setRemoveTargetAddress(event.target.value)}
+                />
+                <button className="danger-button full" onClick={proposeRemoveModerator}>
+                  {t('openRemoval')}
+                </button>
+
+                <input
+                  type="text"
+                  placeholder={t('removalIdPh')}
+                  value={removeProposalId}
+                  onChange={(event) => setRemoveProposalId(event.target.value)}
+                />
+                <button className="danger-button full" onClick={approveRemoveModeratorProposal}>
+                  {t('approveRemoval')}
+                </button>
               </div>
+            </Modal>
+          )}
 
-              {communities.length === 0 ? (
-                <p className="muted-text">אין עדיין קהילות. צור את הראשונה.</p>
-              ) : (
-                <div className="community-list">
-                  {rootCommunities.map((community) => renderCommunityButton(community))}
-                </div>
-              )}
-            </section>
-          </aside>
-
-          <section className="main-feed">
-            {selectedCommunity ? (
-              <>
-                <section className="community-hero panel">
-                  <div>
-                    <span className="eyebrow">Community</span>
-                    <h2>r/{selectedCommunity.name}</h2>
-                    <p>{getCommunityDescription(selectedCommunity)}</p>
-                    <div className="meta-row">
-                      <span>{selectedCommunity.membersCount} members</span>
-                      <span>Creator {formatAddress(selectedCommunity.creator)}</span>
-                      {selectedCommunity.parentCommunityId !== '0' && <span className="badge info">Sub-community</span>}
-                      {selectedCommunity.isMember && <span className="badge success">Member</span>}
-                      {selectedCommunity.isModerator && <span className="badge warning">{roleLabel(selectedCommunity.moderatorRole)}</span>}
-                      {selectedCommunity.isBanned && <span className="badge danger">Banned</span>}
-                    </div>
-                  </div>
-
-                  <div className="hero-actions">
-                    {!selectedCommunity.isMember && !selectedCommunity.isBanned && (
-                      <button className="primary-button" onClick={() => joinCommunity(selectedCommunity.id)}>Join</button>
-                    )}
-                    <button className="secondary-button" onClick={() => setShowCreatePost((previous) => !previous)}>
-                      {showCreatePost ? 'סגור כתיבה' : 'כתוב פוסט'}
-                    </button>
-                  </div>
-                </section>
-
-                <section className="panel subcommunity-card">
-                  <div className="section-heading row-heading">
-                    <div>
-                      <span className="eyebrow">Hierarchy</span>
-                      <h2>יצירת תת־קהילה</h2>
-                    </div>
-                    <span className="counter-pill">parent r/{selectedCommunity.name}</span>
-                  </div>
-                  <div className="two-column-form">
-                    <input
-                      type="text"
-                      placeholder="שם תת־קהילה, למשל solidity"
-                      value={newSubCommunityName}
-                      onChange={(event) => setNewSubCommunityName(event.target.value)}
-                    />
-                    <input
-                      type="text"
-                      placeholder="תיאור קצר לתת־קהילה"
-                      value={newSubCommunityDesc}
-                      onChange={(event) => setNewSubCommunityDesc(event.target.value)}
-                    />
-                  </div>
-                  <button className="ghost-button full" onClick={createSubCommunity}>צור תת־קהילה תחת r/{selectedCommunity.name}</button>
-                </section>
-
-                {showCreatePost && (
-                  <section className="panel create-post-card secondary-create-card">
-                    <div className="section-heading row-heading">
-                      <div>
-                        <span className="eyebrow">New post</span>
-                        <h2>פרסום פוסט</h2>
-                      </div>
-                      <span className="counter-pill">+5 activity</span>
-                    </div>
-
-                    {!selectedCommunity.isMember && (
-                      <p className="warning-text">צריך להצטרף לקהילה לפני יצירת פוסט.</p>
-                    )}
-
-                    <input
-                      type="text"
-                      placeholder="כותרת הפוסט"
-                      value={postTitle}
-                      onChange={(event) => setPostTitle(event.target.value)}
-                    />
-                    <textarea
-                      className="post-body-input"
-                      placeholder="תוכן הפוסט"
-                      value={postBody}
-                      onChange={(event) => setPostBody(event.target.value)}
-                    />
-                    <input
-                      type="text"
-                      placeholder="תגיות מופרדות בפסיקים, למשל React, Solidity"
-                      value={postTags}
-                      onChange={(event) => setPostTags(event.target.value)}
-                    />
-                    <div className="form-footer">
-                      <small>נשמר כ־JSON ב־IPFS, וה־CID נשלח לחוזה.</small>
-                      <button className="primary-button" onClick={createPost}>Publish</button>
-                    </div>
-                  </section>
-                )}
-
-                <section className="feed-list">
-                  <div className="feed-title-row">
-                    <h2>Feed</h2>
-                    <span>{visiblePosts.length} posts</span>
-                  </div>
-
-                  {visiblePosts.length === 0 ? (
-                    <div className="empty-state panel">
-                      <h3>עדיין אין פוסטים</h3>
-                      <p>כפתור כתיבת הפוסט נמצא למעלה, אבל הוא פחות מרכזי כדי שה־Feed יהיה העיקר.</p>
-                    </div>
-                  ) : (
-                    visiblePosts.map((post) => {
-                      const metadata = getPostMetadata(post)
-                      const postComments = commentsForPost(post.id)
-                      const isSelected = selectedPost?.id === post.id
-
-                      return (
-                        <article className={`post-card panel ${post.hidden ? 'hidden-post' : ''} ${isSelected ? 'selected' : ''}`} key={post.id}>
-                          <button className="post-content-button" onClick={() => setSelectedPostId(post.id)}>
-                            <div className="post-vote-box">
-                              <span>▲</span>
-                              <strong>{postComments.length}</strong>
-                              <span>▼</span>
-                            </div>
-
-                            <div className="post-main-content">
-                              <div className="post-meta-line">
-                                <span>r/{selectedCommunity.name}</span>
-                                <span>·</span>
-                                <span>{formatAddress(post.author)}</span>
-                                <span>·</span>
-                                <span>{formatDate(post.createdAt)}</span>
-                              </div>
-                              <h3>{metadata.title}</h3>
-                              <p>{metadata.body}</p>
-                              {metadata.tags && metadata.tags.length > 0 && (
-                                <div className="tag-row">
-                                  {metadata.tags.map((tag) => <span key={`${post.id}-${tag}`}>#{tag}</span>)}
-                                </div>
-                              )}
-                              <div className="post-actions-line">
-                                <span>{postComments.length} תגובות</span>
-                                <span>CID: {post.contentCID.slice(0, 18)}...</span>
-                                {post.hidden && <span className="badge danger">Hidden</span>}
-                              </div>
-                            </div>
-                          </button>
-
-                          {selectedCommunity.isModerator && (
-                            <div className="moderator-actions">
-                              {post.hidden ? (
-                                <button className="ghost-button" onClick={() => restorePost(post.id)}>שחזר פוסט</button>
-                              ) : (
-                                <button className="danger-button" onClick={() => hidePost(post.id)}>הסתר פוסט</button>
-                              )}
-                            </div>
-                          )}
-
-                          {isSelected && (
-                            <div className="comments-box">
-                              <h4>תגובות off-chain</h4>
-                              {postComments.length === 0 ? (
-                                <p className="muted-text">אין תגובות עדיין.</p>
-                              ) : (
-                                <div className="comments-list">
-                                  {postComments.map((comment, index) => (
-                                    <div className="comment-item" key={`${comment.signature}-${index}`}>
-                                      <p>{comment.content}</p>
-                                      <small>
-                                        {formatAddress(comment.author)} · {formatDate(comment.createdAt)} · חתימה{' '}
-                                        {isCommentSignatureValid(comment) ? 'תקינה ✅' : 'לא תקינה ❌'}
-                                      </small>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-
-                              <textarea
-                                placeholder="כתוב תגובה. היא תיחתם ב-MetaMask ותישמר localStorage בלי gas."
-                                value={newCommentByPost[post.id] || ''}
-                                onChange={(event) => setNewCommentByPost((previous) => ({ ...previous, [post.id]: event.target.value }))}
-                              />
-                              <button className="secondary-button full" onClick={() => createOffChainComment(post.id)}>
-                                שלח תגובה ללא gas
-                              </button>
-                            </div>
-                          )}
-                        </article>
-                      )
-                    })
-                  )}
-                </section>
-              </>
-            ) : (
-              <section className="empty-state panel">
-                <h2>בחר קהילה</h2>
-                <p>לאחר בחירת קהילה בצד, יופיע כאן ה־Feed שלה.</p>
-              </section>
-            )}
-          </section>
-
-          <aside className="details-sidebar">
-            <section className="panel details-card governance-card">
-              <span className="eyebrow">Governance</span>
-              {selectedCommunity ? (
-                <>
-                  <h2>Moderators</h2>
-                  <p>יוצר הקהילה קבוע. שני המשתמשים הכי פעילים מתעדכנים אוטומטית. מינוי רגיל דורש 3 אישורים.</p>
-
-                  <div className="mod-list">
-                    {moderators.length === 0 ? (
-                      <p className="muted-text">אין מידע על Moderators.</p>
-                    ) : (
-                      moderators.map((moderator) => (
-                        <div className="mod-row" key={moderator.address}>
-                          <div>
-                            <strong>{formatAddress(moderator.address)}</strong>
-                            <small>{roleLabel(moderator.role)} · score {moderator.score}</small>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="active-box">
-                    <strong>Top active users</strong>
-                    {topActiveUsers.length === 0 ? (
-                      <small>עדיין אין Active Moderators.</small>
-                    ) : (
-                      topActiveUsers.map((address) => <small key={address}>{formatAddress(address)}</small>)
-                    )}
-                  </div>
-
-                  {selectedCommunity.isModerator && (
-                    <div className="governance-tools">
-                      <h3>Moderator actions</h3>
-                      <input
-                        type="text"
-                        placeholder="כתובת משתמש למינוי Moderator"
-                        value={candidateAddress}
-                        onChange={(event) => setCandidateAddress(event.target.value)}
-                      />
-                      <button className="ghost-button full" onClick={proposeModerator}>פתח הצעת מינוי</button>
-
-                      <input
-                        type="text"
-                        placeholder="Proposal ID לאישור מינוי"
-                        value={addProposalId}
-                        onChange={(event) => setAddProposalId(event.target.value)}
-                      />
-                      <button className="secondary-button full" onClick={approveModeratorProposal}>אשר הצעת מינוי</button>
-
-                      <input
-                        type="text"
-                        placeholder="כתובת Appointed Moderator להסרה"
-                        value={removeTargetAddress}
-                        onChange={(event) => setRemoveTargetAddress(event.target.value)}
-                      />
-                      <button className="danger-button full" onClick={proposeRemoveModerator}>פתח הצעת הסרה</button>
-
-                      <input
-                        type="text"
-                        placeholder="Removal Proposal ID לאישור הסרה"
-                        value={removeProposalId}
-                        onChange={(event) => setRemoveProposalId(event.target.value)}
-                      />
-                      <button className="danger-button full" onClick={approveRemoveModeratorProposal}>אשר הצעת הסרה</button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="muted-text">בחר קהילה כדי לראות ממשל והרשאות.</p>
-              )}
-            </section>
-
-            <section className="panel details-card">
-              <span className="eyebrow">Post details</span>
-              {selectedPost ? (
-                <>
-                  <h2>{getPostMetadata(selectedPost).title}</h2>
-                  <p>{getPostMetadata(selectedPost).body}</p>
-                  <div className="details-grid">
-                    <span>Post ID</span>
-                    <strong>#{selectedPost.id}</strong>
-                    <span>Author</span>
-                    <strong>{formatAddress(selectedPost.author)}</strong>
-                    <span>Comments</span>
-                    <strong>{commentsForPost(selectedPost.id).length}</strong>
-                    <span>Storage</span>
-                    <strong>IPFS</strong>
-                  </div>
-                </>
-              ) : (
-                <p className="muted-text">בחר פוסט כדי לראות פרטים.</p>
-              )}
-            </section>
-          </aside>
-        </main>
+          {reviewPrompt && (
+            <Modal title={t('unsafeTitle')} onClose={() => setReviewPrompt(null)}>
+              <p>{reviewPrompt.kind === 'post' ? t('unsafePostBody') : t('unsafeCommentBody')}</p>
+              {reviewPrompt.selfHarm && <p className="warning-text">{t('selfHarmNote')}</p>}
+              <div className="review-actions">
+                <button className="primary-button" onClick={confirmReviewSubmission}>
+                  {t('submitForReview')}
+                </button>
+                <button className="ghost-button" onClick={() => setReviewPrompt(null)}>
+                  {t('cancel')}
+                </button>
+              </div>
+            </Modal>
+          )}
+        </>
       )}
     </div>
   )

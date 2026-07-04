@@ -1,0 +1,165 @@
+import { expect } from "chai";
+import hre from "hardhat";
+
+describe("DecentralizedForum moderation queue", function () {
+  let ethers: any;
+  let owner: any;
+  let user1: any;
+  let user2: any;
+
+  before(async function () {
+    ({ ethers } = await hre.network.connect());
+    [owner, user1, user2] = await ethers.getSigners();
+  });
+
+  async function deployForum() {
+    const forum = await ethers.deployContract("DecentralizedForum");
+    await forum.waitForDeployment();
+    return forum;
+  }
+
+  async function forumWithCommunity() {
+    const forum = await deployForum();
+    await forum.createCommunity("blockchain", "cid-community", "a community");
+    await forum.connect(user1).joinCommunity(1n);
+    return forum;
+  }
+
+  describe("community name validation", function () {
+    it("rejects Hebrew, spaces, and out-of-range lengths", async function () {
+      const forum = await deployForum();
+
+      for (const bad of ["קהילה", "with space", "ab", "a".repeat(31), "name!", "שלום123"]) {
+        await expect(forum.createCommunity(bad, "cid", "desc"), `expected '${bad}' to be rejected`)
+          .to.be.revertedWithCustomError(forum, "InvalidCommunityName");
+      }
+    });
+
+    it("accepts English names with digits, underscore, and hyphen", async function () {
+      const forum = await deployForum();
+      await forum.createCommunity("web3-forum_2", "cid", "desc");
+      expect(await forum.getCommunityCount()).to.equal(1n);
+    });
+
+    it("still rejects empty names with the original error", async function () {
+      const forum = await deployForum();
+      await expect(forum.createCommunity("", "cid", "desc"))
+        .to.be.revertedWithCustomError(forum, "EmptyCommunityName");
+    });
+  });
+
+  describe("flagged posts", function () {
+    it("stores a flagged post as hidden and pending, without activity points", async function () {
+      const forum = await forumWithCommunity();
+
+      await forum.connect(user1).createFlaggedPost(1n, "cid-post", "flagged title", "");
+
+      expect(await forum.postPendingReview(1n)).to.equal(true);
+      expect(await forum.isPostHidden(1n)).to.equal(true);
+      expect(await forum.activityScore(1n, user1.address)).to.equal(0n);
+    });
+
+    it("approval publishes the post and grants activity points", async function () {
+      const forum = await forumWithCommunity();
+      await forum.connect(user1).createFlaggedPost(1n, "cid-post", "flagged title", "");
+
+      await expect(forum.approvePendingPost(1n)).to.emit(forum, "PendingPostApproved");
+
+      expect(await forum.postPendingReview(1n)).to.equal(false);
+      expect(await forum.isPostHidden(1n)).to.equal(false);
+      expect(await forum.postRejected(1n)).to.equal(false);
+      expect(await forum.activityScore(1n, user1.address)).to.equal(await forum.POST_ACTIVITY_POINTS());
+    });
+
+    it("rejection keeps the post hidden and marks it rejected", async function () {
+      const forum = await forumWithCommunity();
+      await forum.connect(user1).createFlaggedPost(1n, "cid-post", "flagged title", "");
+
+      await expect(forum.rejectPendingPost(1n)).to.emit(forum, "PendingPostRejected");
+
+      expect(await forum.postRejected(1n)).to.equal(true);
+      expect(await forum.isPostHidden(1n)).to.equal(true);
+      expect(await forum.activityScore(1n, user1.address)).to.equal(0n);
+    });
+
+    it("only one moderator decision counts, and only moderators can decide", async function () {
+      const forum = await forumWithCommunity();
+      await forum.connect(user1).createFlaggedPost(1n, "cid-post", "flagged title", "");
+
+      await expect(forum.connect(user1).approvePendingPost(1n))
+        .to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
+
+      await forum.approvePendingPost(1n);
+      await expect(forum.rejectPendingPost(1n))
+        .to.be.revertedWithCustomError(forum, "PostNotPendingReview");
+    });
+
+    it("does not treat normal posts as pending", async function () {
+      const forum = await forumWithCommunity();
+      await forum.connect(user1).createPost(1n, "cid-post", "clean title", "");
+
+      expect(await forum.postPendingReview(1n)).to.equal(false);
+      await expect(forum.approvePendingPost(1n))
+        .to.be.revertedWithCustomError(forum, "PostNotPendingReview");
+    });
+  });
+
+  describe("flagged comments", function () {
+    // The post is authored by the owner: a member who publishes a post earns
+    // activity points and can become an automatic Active Moderator, which
+    // would break the "non-moderator" assertions below.
+    async function forumWithPost() {
+      const forum = await forumWithCommunity();
+      await forum.createPost(1n, "cid-post", "a post", "");
+      return forum;
+    }
+
+    it("stores a pending comment and exposes it through views", async function () {
+      const forum = await forumWithPost();
+
+      await expect(forum.connect(user1).submitFlaggedComment(1n, "bad words here", "img-cid"))
+        .to.emit(forum, "CommentSubmittedForReview");
+
+      const ids = await forum.getPendingCommentsByPost(1n);
+      expect(ids.length).to.equal(1);
+
+      const comment = await forum.getPendingComment(ids[0]);
+      expect(comment[2]).to.equal(user1.address);
+      expect(comment[3]).to.equal("bad words here");
+      expect(comment[4]).to.equal("img-cid");
+      expect(comment[6]).to.equal(0);
+    });
+
+    it("approve and reject update status once, moderators only", async function () {
+      const forum = await forumWithPost();
+      await forum.connect(user1).submitFlaggedComment(1n, "first", "");
+      await forum.connect(user1).submitFlaggedComment(1n, "second", "");
+
+      await expect(forum.connect(user1).approvePendingComment(1n))
+        .to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
+
+      await forum.approvePendingComment(1n);
+      expect((await forum.getPendingComment(1n))[6]).to.equal(1);
+
+      await forum.rejectPendingComment(2n);
+      expect((await forum.getPendingComment(2n))[6]).to.equal(2);
+
+      await expect(forum.approvePendingComment(1n))
+        .to.be.revertedWithCustomError(forum, "CommentNotPendingReview");
+    });
+
+    it("requires membership, no ban, and non-empty content", async function () {
+      const forum = await forumWithPost();
+
+      await expect(forum.connect(user2).submitFlaggedComment(1n, "hello", ""))
+        .to.be.revertedWithCustomError(forum, "OnlyCommunityMembersAllowed");
+
+      await expect(forum.connect(user1).submitFlaggedComment(1n, "", ""))
+        .to.be.revertedWithCustomError(forum, "EmptyCommentContent");
+
+      await forum.banUser(1n, user1.address);
+      await expect(forum.connect(user1).submitFlaggedComment(1n, "hello", ""))
+        .to.be.revertedWithCustomError(forum, "UserBannedFromCommunity");
+    });
+  });
+});

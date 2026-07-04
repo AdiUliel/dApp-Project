@@ -1,0 +1,45 @@
+services:
+  graph-node:
+    image: graphprotocol/graph-node:latest
+    ports:
+      - '8000:8000' # GraphQL HTTP queries
+      - '8001:8001' # GraphQL WebSocket
+      - '8020:8020' # Admin JSON-RPC (graph deploy)
+      - '8030:8030' # Index node status
+      - '8040:8040' # Metrics
+    depends_on:
+      - ipfs
+      - postgres
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    environment:
+      postgres_host: postgres
+      postgres_user: graph-node
+      postgres_pass: let-me-in
+      postgres_db: graph-node
+      ipfs: 'ipfs:5001'
+      # host.docker.internal resolves to the Windows host where `npx hardhat node` runs.
+      ethereum: 'localhost:http://host.docker.internal:8545'
+      GRAPH_LOG: info
+      # Required for the @fulltext search directives in schema.graphql.
+      GRAPH_ALLOW_NON_DETERMINISTIC_FULLTEXT_SEARCH: 'true'
+  ipfs:
+    image: ipfs/kubo:v0.34.1
+    ports:
+      - '5001:5001'
+  postgres:
+    image: postgres:16
+    ports:
+      - '5432:5432'
+    command: ['postgres', '-cshared_preload_libraries=pg_stat_statements', '-cmax_connections=200']
+    environment:
+      POSTGRES_USER: graph-node
+      POSTGRES_PASSWORD: let-me-in
+      POSTGRES_DB: graph-node
+      # graph-node requires a C locale database
+      POSTGRES_INITDB_ARGS: '-E UTF8 --locale=C'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:

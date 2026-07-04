@@ -23,7 +23,7 @@ describe("DecentralizedForum governance upgrade", function () {
   it("makes the creator the first permanent moderator", async function () {
     const forum = await deployForum();
 
-    await forum.createCommunity("blockchain", "cid-community");
+    await forum.createCommunity("blockchain", "cid-community", "a community");
 
     expect(await forum.isUserModeratorOfCommunity(1n, owner.address)).to.equal(true);
 
@@ -37,11 +37,11 @@ describe("DecentralizedForum governance upgrade", function () {
   it("creates a sub-community with a parent community id", async function () {
     const forum = await deployForum();
 
-    await forum.createCommunity("technion", "cid-parent");
-    await forum.createSubCommunity(1n, "cs", "cid-child");
+    await forum.createCommunity("technion", "cid-parent", "a community");
+    await forum.createSubCommunity(1n, "cs101", "cid-child", "a sub community");
 
     const child = await forum.getCommunityV2(2n);
-    expect(child[1]).to.equal("cs");
+    expect(child[1]).to.equal("cs101");
     expect(child[7]).to.equal(1n);
 
     const children = await forum.getSubCommunities(1n);
@@ -51,19 +51,19 @@ describe("DecentralizedForum governance upgrade", function () {
   it("automatically promotes the two most active non-creator users", async function () {
     const forum = await deployForum();
 
-    await forum.createCommunity("solidity", "cid");
+    await forum.createCommunity("solidity", "cid", "a community");
     await forum.connect(user1).joinCommunity(1n);
     await forum.connect(user2).joinCommunity(1n);
     await forum.connect(user3).joinCommunity(1n);
 
-    await forum.connect(user1).createPost(1n, "post-1");
-    await forum.connect(user2).createPost(1n, "post-2");
+    await forum.connect(user1).createPost(1n, "post-1", "a title", "tag1,tag2");
+    await forum.connect(user2).createPost(1n, "post-2", "a title", "tag1,tag2");
 
     expect(await forum.isUserModeratorOfCommunity(1n, user1.address)).to.equal(true);
     expect(await forum.isUserModeratorOfCommunity(1n, user2.address)).to.equal(true);
 
-    await forum.connect(user3).createPost(1n, "post-3");
-    await forum.connect(user3).createPost(1n, "post-4");
+    await forum.connect(user3).createPost(1n, "post-3", "a title", "tag1,tag2");
+    await forum.connect(user3).createPost(1n, "post-4", "a title", "tag1,tag2");
 
     expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(true);
 
@@ -74,14 +74,14 @@ describe("DecentralizedForum governance upgrade", function () {
   it("adds an appointed moderator only after 3 moderator approvals", async function () {
     const forum = await deployForum();
 
-    await forum.createCommunity("react", "cid");
+    await forum.createCommunity("react", "cid", "a community");
     await forum.connect(user1).joinCommunity(1n);
     await forum.connect(user2).joinCommunity(1n);
     await forum.connect(user3).joinCommunity(1n);
     await forum.connect(user4).joinCommunity(1n);
 
-    await forum.connect(user1).createPost(1n, "post-1");
-    await forum.connect(user2).createPost(1n, "post-2");
+    await forum.connect(user1).createPost(1n, "post-1", "a title", "tag1,tag2");
+    await forum.connect(user2).createPost(1n, "post-2", "a title", "tag1,tag2");
 
     await forum.proposeModerator(1n, user3.address);
     expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(false);
@@ -99,14 +99,14 @@ describe("DecentralizedForum governance upgrade", function () {
   it("removes an appointed moderator only by removal vote", async function () {
     const forum = await deployForum();
 
-    await forum.createCommunity("security", "cid");
+    await forum.createCommunity("security", "cid", "a community");
     await forum.connect(user1).joinCommunity(1n);
     await forum.connect(user2).joinCommunity(1n);
     await forum.connect(user3).joinCommunity(1n);
     await forum.connect(user4).joinCommunity(1n);
 
-    await forum.connect(user1).createPost(1n, "post-1");
-    await forum.connect(user2).createPost(1n, "post-2");
+    await forum.connect(user1).createPost(1n, "post-1", "a title", "tag1,tag2");
+    await forum.connect(user2).createPost(1n, "post-2", "a title", "tag1,tag2");
 
     await forum.proposeModerator(1n, user3.address);
     await forum.connect(user1).approveModeratorProposal(1n);

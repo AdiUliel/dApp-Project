@@ -1,0 +1,92 @@
+specVersion: 1.0.0
+features:
+  - fullTextSearch
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum
+    name: DecentralizedForum
+    network: localhost
+    source:
+      address: '0x5FbDB2315678afecb367f032d93F642f64180aa3'
+      abi: DecentralizedForum
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - User
+        - Community
+        - Post
+        - Vote
+        - Activity
+        - Notification
+      abis:
+        - name: DecentralizedForum
+          file: ./abis/DecentralizedForum.json
+      eventHandlers:
+        - event: CommunityCreated(indexed uint256,indexed address,string,string,string,uint256)
+          handler: handleCommunityCreated
+          receipt: true
+        - event: SubCommunityCreated(indexed uint256,indexed uint256,indexed address,string,string,string,uint256)
+          handler: handleSubCommunityCreated
+          receipt: true
+        - event: CommunityJoined(indexed uint256,indexed address,uint256)
+          handler: handleCommunityJoined
+          receipt: true
+        - event: CommunityLeft(indexed uint256,indexed address,uint256)
+          handler: handleCommunityLeft
+          receipt: true
+        - event: PostCreated(indexed uint256,indexed uint256,indexed address,string,string,string,uint256)
+          handler: handlePostCreated
+          receipt: true
+        - event: PostVoted(indexed uint256,indexed uint256,indexed address,int8,int256,uint256)
+          handler: handlePostVoted
+          receipt: true
+        - event: PostHidden(indexed uint256,indexed uint256,indexed address,uint256)
+          handler: handlePostHidden
+          receipt: true
+        - event: PostRestored(indexed uint256,indexed uint256,indexed address,uint256)
+          handler: handlePostRestored
+          receipt: true
+        - event: ModeratorAdded(indexed uint256,indexed address,indexed address,uint256)
+          handler: handleModeratorAdded
+          receipt: true
+        - event: ModeratorRemoved(indexed uint256,indexed address,indexed address,uint256)
+          handler: handleModeratorRemoved
+          receipt: true
+        - event: ActiveModeratorsUpdated(indexed uint256,address,address,uint256)
+          handler: handleActiveModeratorsUpdated
+          receipt: true
+        - event: PostSubmittedForReview(indexed uint256,indexed uint256,indexed address,string,uint256)
+          handler: handlePostSubmittedForReview
+          receipt: true
+        - event: PendingPostApproved(indexed uint256,indexed uint256,indexed address,uint256)
+          handler: handlePendingPostApproved
+          receipt: true
+        - event: PendingPostRejected(indexed uint256,indexed uint256,indexed address,uint256)
+          handler: handlePendingPostRejected
+          receipt: true
+        - event: CommentSubmittedForReview(indexed uint256,indexed uint256,indexed uint256,address,string,string,uint256)
+          handler: handleCommentSubmittedForReview
+          receipt: true
+        - event: PendingCommentApproved(indexed uint256,indexed uint256,indexed uint256,address,uint256)
+          handler: handlePendingCommentApproved
+          receipt: true
+        - event: PendingCommentRejected(indexed uint256,indexed uint256,indexed uint256,address,uint256)
+          handler: handlePendingCommentRejected
+          receipt: true
+        - event: UsernameRegistered(indexed address,string,uint256)
+          handler: handleUsernameRegistered
+          receipt: true
+        - event: UsernameChanged(indexed address,string,string,uint256)
+          handler: handleUsernameChanged
+          receipt: true
+        - event: UserBanned(indexed uint256,indexed address,indexed address,uint256)
+          handler: handleUserBanned
+          receipt: true
+        - event: UserUnbanned(indexed uint256,indexed address,indexed address,uint256)
+          handler: handleUserUnbanned
+          receipt: true
+      file: ./src/mapping.ts
