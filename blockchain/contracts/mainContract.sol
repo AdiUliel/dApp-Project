@@ -115,6 +115,10 @@ contract DecentralizedForum {
     mapping(uint256 => PendingComment) private pendingComments;
     mapping(uint256 => uint256[]) private pendingCommentIdsByPost;
 
+    // Clean comments are event-only (content carried in the log, indexed by The
+    // Graph) so they cost minimal bytecode and still flow through the dApp.
+    uint256 private nextCommentId = 1;
+
     // ERRORS //
     error CommunityDoesNotExist();
     error PostDoesNotExist();
@@ -365,6 +369,16 @@ contract DecentralizedForum {
         uint256 indexed communityId,
         address indexed moderator,
         uint256 rejectedAt
+    );
+
+    event CommentCreated(
+        uint256 indexed commentId,
+        uint256 indexed postId,
+        uint256 indexed communityId,
+        address author,
+        string content,
+        string imageCid,
+        uint256 createdAt
     );
 
     event CommentSubmittedForReview(
@@ -873,6 +887,40 @@ contract DecentralizedForum {
         postRejected[postId] = true;
 
         emit PendingPostRejected(postId, posts[postId].communityId, msg.sender, block.timestamp);
+    }
+
+    // Publishes a clean comment straight to the chain (event-indexed). Same
+    // gate as submitFlaggedComment so every instance sees the same comments.
+    function addComment(uint256 postId, string calldata content, string calldata imageCid)
+        external
+        postMustExist(postId)
+    {
+        if (bytes(content).length == 0) {
+            revert EmptyCommentContent();
+        }
+
+        uint256 communityId = posts[postId].communityId;
+
+        if (isBanned[communityId][msg.sender]) {
+            revert UserBannedFromCommunity();
+        }
+
+        if (!isMember[communityId][msg.sender]) {
+            revert OnlyCommunityMembersAllowed();
+        }
+
+        uint256 commentId = nextCommentId;
+        nextCommentId++;
+
+        emit CommentCreated(
+            commentId,
+            postId,
+            communityId,
+            msg.sender,
+            content,
+            imageCid,
+            block.timestamp
+        );
     }
 
     function submitFlaggedComment(uint256 postId, string calldata content, string calldata imageCid)

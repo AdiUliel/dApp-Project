@@ -14,3 +14,10 @@ blockchain/ignition/deployments/
 
 # Vite
 reddit-dapp-project/dist/
+
+# Sepolia deployer key (testnet-only, never commit)
+blockchain/.sepolia-deployer.json
+blockchain/.sepolia-users.json
+
+# Generated Sepolia subgraph manifest (built by subgraph/make-sepolia-manifest.mjs)
+subgraph/subgraph.sepolia.yaml

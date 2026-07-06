@@ -22,11 +22,12 @@ import {
   PostSubmittedForReview,
   PendingPostApproved,
   PendingPostRejected,
+  CommentCreated,
   CommentSubmittedForReview,
   PendingCommentApproved,
   PendingCommentRejected,
 } from '../generated/DecentralizedForum/DecentralizedForum'
-import { User, Community, Post, Vote, Activity, Notification, PendingComment } from '../generated/schema'
+import { User, Community, Post, Vote, Activity, Notification, Comment, PendingComment } from '../generated/schema'
 
 const EMPTY_ADDRESS = '0x0000000000000000000000000000000000000000'
 
@@ -468,6 +469,29 @@ export function handlePendingPostRejected(event: PendingPostRejected): void {
   const author = Address.fromString(post.author)
   if (!author.equals(event.params.moderator)) {
     notify(event, author, 'POST_REJECTED', event.params.moderator, event.params.postId, post.title)
+  }
+}
+
+export function handleCommentCreated(event: CommentCreated): void {
+  const comment = new Comment(event.params.commentId.toString())
+  comment.post = event.params.postId.toString()
+  comment.community = event.params.communityId.toString()
+  comment.author = getOrCreateUser(event.params.author).id
+  comment.content = event.params.content
+  comment.imageCid = event.params.imageCid
+  comment.createdAt = event.params.createdAt
+  comment.save()
+
+  recordActivity(event, event.params.author, 'COMMENT_CREATED', event.params.postId, event.params.content)
+
+  // Notify the post author (unless they commented on their own post). Works
+  // cross-machine now that comments live on-chain.
+  const post = Post.load(event.params.postId.toString())
+  if (post != null) {
+    const author = Address.fromString(post.author)
+    if (!author.equals(event.params.author)) {
+      notify(event, author, 'COMMENT_REPLY', event.params.author, event.params.postId, event.params.content)
+    }
   }
 }
 

@@ -3,13 +3,18 @@ import { ethers } from 'ethers'
 import contractArtifact from './DecentralizedForum.json'
 import { addJson, addFile, getJson, ipfsUrl } from './ipfs'
 import Modal from './Modal'
+import { Composer, renderRichText } from './Composer'
 import { validateUsername, isValidCommunityName } from './usernamePolicy'
 import { checkContentSafety } from './contentSafety'
 import { loadLanguage, makeTranslator, LANGUAGE_STORAGE_KEY, type Language, type TranslationKey } from './i18n'
+import { contractAddressForChain, NETWORK_NAMES } from './config'
 import {
   fetchApprovedComments,
+  fetchComments,
   fetchPendingComments,
   fetchRecentPosts,
+  setGraphEndpoint,
+  waitForGraphBlock,
   fetchUserActivities,
   fetchUserNotifications,
   fetchUserProfile,
@@ -24,7 +29,6 @@ import {
 } from './graph'
 import './App.css'
 
-const CONTRACT_ADDRESS = '0x5FbDB2315678afecb367f032d93F642f64180aa3'
 const COMMENTS_STORAGE_KEY = 'reppit_signed_comments_v1'
 const READ_NOTIFICATIONS_KEY = 'reppit_read_notifications_v1'
 const USERNAME_CHANGE_FEE_ETH = '0.05'
@@ -182,6 +186,7 @@ function App() {
   const t = useMemo(() => makeTranslator(lang), [lang])
 
   const [walletAddress, setWalletAddress] = useState('')
+  const [contractAddress, setContractAddress] = useState('')
   const [statusMessage, setStatusMessage] = useState('')
   const [modNotification, setModNotification] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
@@ -340,6 +345,17 @@ function App() {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, lang)
   }, [lang])
 
+  // Switching networks in MetaMask changes the contract/graph target; a full
+  // reload is the simplest way to re-resolve cleanly.
+  useEffect(() => {
+    const ethereum = window.ethereum as { on?: (e: string, cb: () => void) => void; removeListener?: (e: string, cb: () => void) => void } | undefined
+    if (!ethereum?.on) return
+
+    const onChainChanged = () => window.location.reload()
+    ethereum.on('chainChanged', onChainChanged)
+    return () => ethereum.removeListener?.('chainChanged', onChainChanged)
+  }, [])
+
   useEffect(() => {
     if (walletAddress) {
       loadCommunities(walletAddress, true)
@@ -351,6 +367,14 @@ function App() {
     if (walletAddress && storageScope) {
       loadNotifications(walletAddress)
     }
+  }, [walletAddress, storageScope])
+
+  // Without polling, votes/comments made by others while the tab is open never
+  // reach the bell — the author had to reload to see them.
+  useEffect(() => {
+    if (!walletAddress || !storageScope) return
+    const interval = setInterval(() => loadNotifications(walletAddress), 30_000)
+    return () => clearInterval(interval)
   }, [walletAddress, storageScope])
 
   useEffect(() => {
@@ -367,11 +391,11 @@ function App() {
   }, [communities, posts, moderators, topActiveUsers, comments, trendingPosts, onChainComments, pendingComments])
 
   useEffect(() => {
-    if (!walletAddress || !window.ethereum) return
+    if (!walletAddress || !contractAddress || !window.ethereum) return
 
     let cancelled = false
     const provider = new ethers.BrowserProvider(window.ethereum as ethers.Eip1193Provider)
-    const contract = new ethers.Contract(CONTRACT_ADDRESS, contractArtifact.abi, provider)
+    const contract = new ethers.Contract(contractAddress, contractArtifact.abi, provider)
 
     const flashModNotification = (message: string) => {
       setModNotification(message)
@@ -478,7 +502,7 @@ function App() {
       contract.off('ModeratorOfferCreated', onModeratorOfferCreated)
       contract.off('RemoveModeratorProposalCreated', onRemovalProposalCreated)
     }
-  }, [walletAddress, lang])
+  }, [walletAddress, contractAddress, lang])
 
   useEffect(() => {
     const name = usernameInput.trim()
@@ -581,13 +605,33 @@ function App() {
 
   const getContract = async (withSigner = false) => {
     const provider = getProvider()
+    const address = contractAddress || (await resolveContractAddress())
 
     if (withSigner) {
       const signer = await provider.getSigner()
-      return new ethers.Contract(CONTRACT_ADDRESS, contractArtifact.abi, signer)
+      return new ethers.Contract(address, contractArtifact.abi, signer)
     }
 
-    return new ethers.Contract(CONTRACT_ADDRESS, contractArtifact.abi, provider)
+    return new ethers.Contract(address, contractArtifact.abi, provider)
+  }
+
+  // Resolves the contract address for the network MetaMask is currently on, and
+  // points the Graph client at the matching endpoint.
+  const resolveContractAddress = async () => {
+    const provider = getProvider()
+    const network = await provider.getNetwork()
+    const chainId = Number(network.chainId)
+    setGraphEndpoint(chainId)
+
+    const address = contractAddressForChain(chainId)
+    if (!address) {
+      const name = NETWORK_NAMES[chainId] || `chain ${chainId}`
+      setTemporaryStatus(t('unsupportedNetwork', { network: name }))
+      throw new Error(`Unsupported network: ${chainId}`)
+    }
+
+    setContractAddress(address)
+    return address
   }
 
   const setTemporaryStatus = (message: string) => {
@@ -683,13 +727,32 @@ function App() {
     try {
       const provider = getProvider()
       const accounts = await provider.send('eth_requestAccounts', [])
+      await resolveContractAddress()
       setWalletAddress(accounts[0])
       await loadCommunities(accounts[0], true)
       setTemporaryStatus(t('walletConnected'))
     } catch (error) {
       console.error('Wallet connection failed:', error)
+      if (String(error).includes('Unsupported network')) return
       alert(t('connectFailed'))
     }
+  }
+
+  // Revokes the site's MetaMask permission so it no longer auto-connects,
+  // then reloads to clear all in-memory state.
+  const disconnectWallet = async () => {
+    try {
+      const ethereum = window.ethereum as
+        | { request?: (args: { method: string; params?: unknown[] }) => Promise<unknown> }
+        | undefined
+      await ethereum?.request?.({
+        method: 'wallet_revokePermissions',
+        params: [{ eth_accounts: {} }],
+      })
+    } catch {
+      // Older wallets don't support revoke; the reload still drops the session.
+    }
+    window.location.reload()
   }
 
   const submitUsername = async () => {
@@ -926,15 +989,17 @@ function App() {
     }
   }
 
-  // Approved + pending on-chain comments for the community. Prefers the graph;
-  // falls back to per-post chain reads.
+  // All on-chain comments for the community: clean ones (addComment) plus
+  // approved flagged ones are shown together; pending flagged ones feed the
+  // moderator queue. Prefers the graph, falls back to chain reads/logs.
   const loadOnChainComments = async (communityId: string, communityPosts: Post[]) => {
-    const [graphPending, approvedPerPost] = await Promise.all([
+    const [graphClean, graphPending, approvedPerPost] = await Promise.all([
+      fetchComments(communityId),
       fetchPendingComments(communityId),
       Promise.all(communityPosts.map((post) => fetchApprovedComments(post.id))),
     ])
 
-    if (graphPending !== null) {
+    if (graphClean !== null && graphPending !== null) {
       setPendingComments(
         graphPending.map((comment) => ({
           id: comment.id,
@@ -947,39 +1012,69 @@ function App() {
         }))
       )
 
-      const approved: OnChainComment[] = []
+      const shown: OnChainComment[] = graphClean.map((comment) => ({
+        id: `c-${comment.id}`,
+        postId: comment.post.id,
+        author: comment.author.id,
+        content: comment.content,
+        imageCid: comment.imageCid,
+        createdAt: Number(comment.createdAt),
+        status: 1,
+      }))
       approvedPerPost.forEach((batch) => {
         if (batch) {
           batch.forEach((comment) => {
-            approved.push({
-              id: comment.id,
+            shown.push({
+              id: `p-${comment.id}`,
               postId: comment.post.id,
               author: comment.author.id,
               content: comment.content,
               imageCid: comment.imageCid,
               createdAt: Number(comment.createdAt),
-              status: comment.status,
+              status: 1,
             })
           })
         }
       })
-      setOnChainComments(approved)
+      shown.sort((a, b) => a.createdAt - b.createdAt)
+      setOnChainComments(shown)
       return
     }
 
-    // Chain fallback
+    // Chain fallback (no graph): clean comments via event logs, flagged via storage getters.
     try {
       const contract = await getContract(false)
+      const provider = getProvider()
+      const shown: OnChainComment[] = []
       const pending: OnChainComment[] = []
-      const approved: OnChainComment[] = []
+      const postIds = new Set(communityPosts.map((post) => post.id))
+
+      // Bounded log scan keeps this cheap on public RPCs.
+      const latest = await provider.getBlockNumber()
+      const fromBlock = Math.max(0, latest - 50000)
+      const events = await contract.queryFilter(contract.filters.CommentCreated(), fromBlock, latest)
+      for (const event of events) {
+        const args = (event as ethers.EventLog).args
+        if (!args) continue
+        const postId = args[1].toString()
+        if (!postIds.has(postId)) continue
+        shown.push({
+          id: `c-${args[0].toString()}`,
+          postId,
+          author: args[3],
+          content: args[4],
+          imageCid: args[5],
+          createdAt: Number(args[6]),
+          status: 1,
+        })
+      }
 
       for (const post of communityPosts) {
         const ids = await contract.getPendingCommentsByPost(post.id)
-
         for (const id of ids) {
           const c = await contract.getPendingComment(id)
           const item: OnChainComment = {
-            id: c[0].toString(),
+            id: `p-${c[0].toString()}`,
             postId: c[1].toString(),
             author: c[2],
             content: c[3],
@@ -987,14 +1082,14 @@ function App() {
             createdAt: Number(c[5]),
             status: Number(c[6]),
           }
-
           if (item.status === 0) pending.push(item)
-          if (item.status === 1) approved.push(item)
+          if (item.status === 1) shown.push(item)
         }
       }
 
+      shown.sort((a, b) => a.createdAt - b.createdAt)
       setPendingComments(pending)
-      setOnChainComments(approved)
+      setOnChainComments(shown)
     } catch (error) {
       console.error('Failed to load on-chain comments:', error)
     }
@@ -1116,12 +1211,6 @@ function App() {
 
   const loadLocalComments = () => {
     setComments(readStoredComments())
-  }
-
-  const saveLocalComments = (nextComments: SignedComment[]) => {
-    const key = scopedStorageKey(COMMENTS_STORAGE_KEY)
-    if (key) localStorage.setItem(key, JSON.stringify(nextComments))
-    setComments(nextComments)
   }
 
   const loadReadNotificationIds = (): string[] => {
@@ -1631,7 +1720,8 @@ function App() {
       const contract = await getContract(true)
       setTemporaryStatus(t('approvingItem'))
       const tx = approved ? await contract.approvePendingPost(postId) : await contract.rejectPendingPost(postId)
-      await tx.wait()
+      const receipt = await tx.wait()
+      await waitForGraphBlock(receipt.blockNumber)
       await loadPosts(selectedCommunityId)
       setTemporaryStatus(approved ? t('postApprovedToast') : t('postRejectedToast'))
     } catch (error) {
@@ -1647,7 +1737,8 @@ function App() {
       const tx = approved
         ? await contract.approvePendingComment(commentId)
         : await contract.rejectPendingComment(commentId)
-      await tx.wait()
+      const receipt = await tx.wait()
+      await waitForGraphBlock(receipt.blockNumber)
       await loadPosts(selectedCommunityId)
       setTemporaryStatus(approved ? t('commentApprovedToast') : t('commentRejectedToast'))
     } catch (error) {
@@ -1656,8 +1747,7 @@ function App() {
     }
   }
 
-  // Sends a flagged comment on-chain for review (unlike clean comments, which
-  // stay gas-free in localStorage).
+  // Sends a flagged comment on-chain into the moderator review queue.
   const submitFlaggedComment = async (postId: string) => {
     const content = (newCommentByPost[postId] || '').trim()
 
@@ -1677,10 +1767,11 @@ function App() {
     try {
       const contract = await getContract(true)
       const tx = await contract.submitFlaggedComment(postId, content, imageCid)
-      await tx.wait()
+      const receipt = await tx.wait()
 
       setNewCommentByPost((previous) => ({ ...previous, [postId]: '' }))
       setCommentImageByPost((previous) => ({ ...previous, [postId]: undefined }))
+      await waitForGraphBlock(receipt.blockNumber)
       await loadPosts(selectedCommunityId)
       setTemporaryStatus(t('commentSubmittedForReview'))
     } catch (error) {
@@ -1689,7 +1780,9 @@ function App() {
     }
   }
 
-  const createOffChainComment = async (postId: string) => {
+  // Clean comments go straight on-chain (addComment) so every site instance
+  // sees them; unsafe ones are routed into the moderator queue instead.
+  const submitComment = async (postId: string) => {
     const content = (newCommentByPost[postId] || '').trim()
 
     if (!content) {
@@ -1720,8 +1813,6 @@ function App() {
       return
     }
 
-    // Image pinning happens before signing and has its own error message, so a
-    // Pinata failure is never misreported as a MetaMask signing problem.
     let imageCid = ''
     const image = commentImageByPost[postId]
     if (image) {
@@ -1736,31 +1827,20 @@ function App() {
     }
 
     try {
-      const provider = getProvider()
-      const signer = await provider.getSigner()
-      const author = await signer.getAddress()
-      const createdAt = Date.now()
+      const contract = await getContract(true)
+      const tx = await contract.addComment(postId, content, imageCid)
+      setTemporaryStatus(t('postSent'))
+      const receipt = await tx.wait()
 
-      const message = JSON.stringify({
-        app: 'Reppit',
-        type: 'OFF_CHAIN_COMMENT',
-        postId,
-        author,
-        content,
-        createdAt,
-        imageCid,
-      })
-
-      const signature = await signer.signMessage(message)
-      const nextComments = [...comments, { postId, author, content, createdAt, message, signature, imageCid }]
-
-      saveLocalComments(nextComments)
       setNewCommentByPost((previous) => ({ ...previous, [postId]: '' }))
       setCommentImageByPost((previous) => ({ ...previous, [postId]: undefined }))
-      setTemporaryStatus(t('commentSaved'))
+      // Give the indexer time to catch up, or the refresh reads stale data.
+      await waitForGraphBlock(receipt.blockNumber)
+      await loadPosts(selectedCommunityId)
+      setTemporaryStatus(t('commentPostedOnChain'))
     } catch (error) {
-      console.error('Off-chain comment failed:', error)
-      alert(t('commentSignFailed'))
+      console.error('On-chain comment failed:', error)
+      alert(t('commentSubmitFailed'))
     }
   }
 
@@ -1841,6 +1921,12 @@ function App() {
   }
 
   const openCommunity = (communityId: string) => {
+    // Re-clicking the current community won't re-fire the load effect (state
+    // unchanged), so refresh explicitly - it doubles as a manual refresh.
+    if (communityId === selectedCommunityId) {
+      loadPosts(communityId)
+      loadModeratorInfo(communityId)
+    }
     setSelectedCommunityId(communityId)
     setView('community')
   }
@@ -1957,7 +2043,7 @@ function App() {
                       <span>{formatDate(post.createdAt)}</span>
                     </div>
                     <h3>{title}</h3>
-                    <p>{metadata.body}</p>
+                    <p className="rich-text">{renderRichText(metadata.body)}</p>
                     {renderPostImages(post.id, metadata.images)}
                     {tags.length > 0 && (
                       <div className="tag-row">
@@ -1996,7 +2082,7 @@ function App() {
                 <div className="review-item" key={`pending-post-${post.id}`}>
                   <div className="review-item-body">
                     <strong>{metadata.title}</strong>
-                    <p>{metadata.body}</p>
+                    <p className="rich-text">{renderRichText(metadata.body)}</p>
                     {renderPostImages(post.id, metadata.images)}
                     <small>
                       {formatUser(post.author)} · {formatDate(post.createdAt)}
@@ -2022,7 +2108,7 @@ function App() {
             {pendingComments.map((comment) => (
               <div className="review-item" key={`pending-comment-${comment.id}`}>
                 <div className="review-item-body">
-                  <p>{comment.content}</p>
+                  <p className="rich-text">{renderRichText(comment.content)}</p>
                   {comment.imageCid && <img className="post-image" src={ipfsUrl(comment.imageCid)} alt="" />}
                   <small>
                     {formatUser(comment.author)} · {formatDate(comment.createdAt)} · Post #{comment.postId}
@@ -2108,11 +2194,12 @@ function App() {
               value={postTitle}
               onChange={(event) => setPostTitle(event.target.value)}
             />
-            <textarea
+            <Composer
+              rich
               className="post-body-input"
               placeholder={t('postBodyPh')}
               value={postBody}
-              onChange={(event) => setPostBody(event.target.value)}
+              onChange={setPostBody}
             />
             <input
               type="text"
@@ -2196,7 +2283,7 @@ function App() {
                           <span>{formatDate(post.createdAt)}</span>
                         </div>
                         <h3>{metadata.title}</h3>
-                        <p>{metadata.body}</p>
+                        <p className="rich-text">{renderRichText(metadata.body)}</p>
                         {renderPostImages(post.id, metadata.images)}
                         {metadata.tags && metadata.tags.length > 0 && (
                           <div className="tag-row">
@@ -2207,7 +2294,6 @@ function App() {
                         )}
                         <div className="post-actions-line">
                           <span>{t('commentsCount', { count: totalComments })}</span>
-                          <span>CID: {post.contentCID.slice(0, 18)}...</span>
                           {post.pending && <span className="badge warning">{t('pendingBadge')}</span>}
                           {post.rejected && <span className="badge danger">{t('rejectedBadge')}</span>}
                           {post.hidden && !post.pending && !post.rejected && (
@@ -2240,7 +2326,7 @@ function App() {
                           <div className="comments-list">
                             {chainComments.map((comment) => (
                               <div className="comment-item" key={`chain-${comment.id}`}>
-                                <p>{comment.content}</p>
+                                <p className="rich-text">{renderRichText(comment.content)}</p>
                                 {comment.imageCid && <img className="post-image" src={ipfsUrl(comment.imageCid)} alt="" />}
                                 <small>
                                   {formatUser(comment.author)} · {formatDate(comment.createdAt)} · {t('onChainComment')}
@@ -2249,7 +2335,7 @@ function App() {
                             ))}
                             {postComments.map((comment, index) => (
                               <div className="comment-item" key={`${comment.signature}-${index}`}>
-                                <p>{comment.content}</p>
+                                <p className="rich-text">{renderRichText(comment.content)}</p>
                                 {comment.imageCid && <img className="post-image" src={ipfsUrl(comment.imageCid)} alt="" />}
                                 <small>
                                   {formatUser(comment.author)} · {formatDate(comment.createdAt)} · {t('signatureLabel')}{' '}
@@ -2260,16 +2346,16 @@ function App() {
                           </div>
                         )}
 
-                        <textarea
+                        <Composer
+                          rich
                           placeholder={t('commentPh')}
                           value={newCommentByPost[post.id] || ''}
-                          onChange={(event) =>
-                            setNewCommentByPost((previous) => ({ ...previous, [post.id]: event.target.value }))
+                          onChange={(value) =>
+                            setNewCommentByPost((previous) => ({ ...previous, [post.id]: value }))
                           }
                         />
                         <label className="file-input-label">
                           {t('attachCommentImage')}
-                          {commentImageByPost[post.id] && <span> ({commentImageByPost[post.id]?.name})</span>}
                           <input
                             type="file"
                             accept="image/png,image/jpeg,image/gif,image/webp"
@@ -2280,7 +2366,25 @@ function App() {
                             }}
                           />
                         </label>
-                        <button className="secondary-button full" onClick={() => createOffChainComment(post.id)}>
+                        {commentImageByPost[post.id] && (
+                          <div className="image-previews">
+                            <div className="image-preview">
+                              <img
+                                src={URL.createObjectURL(commentImageByPost[post.id] as File)}
+                                alt={commentImageByPost[post.id]?.name}
+                              />
+                              <button
+                                className="ghost-button"
+                                onClick={() =>
+                                  setCommentImageByPost((previous) => ({ ...previous, [post.id]: undefined }))
+                                }
+                              >
+                                {t('removeImage')}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        <button className="secondary-button full" onClick={() => submitComment(post.id)}>
                           {t('sendComment')}
                         </button>
                       </div>
@@ -2659,6 +2763,9 @@ function App() {
                 <span className="status-dot" />
                 <span className="wallet-label">{t('connected')}</span>
                 <code>{formatAddress(walletAddress)}</code>
+                <button className="ghost-button disconnect-button" onClick={disconnectWallet}>
+                  {t('disconnect')}
+                </button>
               </>
             ) : (
               <button className="primary-button" onClick={connectWallet}>
@@ -2785,7 +2892,7 @@ function App() {
                       {selectedPost ? (
                         <>
                           <h2>{getPostMetadata(selectedPost).title}</h2>
-                          <p>{getPostMetadata(selectedPost).body}</p>
+                          <p className="rich-text">{renderRichText(getPostMetadata(selectedPost).body)}</p>
                           <div className="details-grid">
                             <span>{t('postIdLabel')}</span>
                             <strong>#{selectedPost.id}</strong>
@@ -2883,10 +2990,10 @@ function App() {
               {newCommunityName.trim() && !isValidCommunityName(newCommunityName.trim()) && (
                 <p className="warning-text">{t('communityNameInvalid')}</p>
               )}
-              <textarea
+              <Composer
                 placeholder={t('communityDescPh')}
                 value={newCommunityDesc}
-                onChange={(event) => setNewCommunityDesc(event.target.value)}
+                onChange={setNewCommunityDesc}
               />
               <button className="primary-button full" onClick={createCommunity}>
                 {t('createCommunityButton')}
@@ -2908,10 +3015,10 @@ function App() {
               {newSubCommunityName.trim() && !isValidCommunityName(newSubCommunityName.trim()) && (
                 <p className="warning-text">{t('communityNameInvalid')}</p>
               )}
-              <textarea
+              <Composer
                 placeholder={t('subDescPh')}
                 value={newSubCommunityDesc}
-                onChange={(event) => setNewSubCommunityDesc(event.target.value)}
+                onChange={setNewSubCommunityDesc}
               />
               <button className="ghost-button full" onClick={createSubCommunity}>
                 {t('createSubButton')}

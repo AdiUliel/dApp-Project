@@ -44,6 +44,16 @@ type Post @entity(immutable: false) {
   createdAt: BigInt!
 }
 
+type Comment @entity(immutable: true) {
+  id: ID! # on-chain comment id
+  post: Post!
+  community: Community!
+  author: User!
+  content: String!
+  imageCid: String!
+  createdAt: BigInt!
+}
+
 type PendingComment @entity(immutable: false) {
   id: ID! # on-chain pending comment id
   post: Post!
@@ -83,6 +93,7 @@ enum ActivityType {
   POST_REVIEWED
   COMMENT_REVIEWED
   COMMENT_SUBMITTED
+  COMMENT_CREATED
 }
 
 type Activity @entity(immutable: true) {
@@ -112,6 +123,7 @@ enum NotificationType {
   POST_REJECTED
   COMMENT_APPROVED
   COMMENT_REJECTED
+  COMMENT_REPLY
 }
 
 type Notification @entity(immutable: true) {

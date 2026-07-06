@@ -1,11 +1,20 @@
-// Thin client for the local Graph node. Callers should treat a null result as
-// "graph offline" and fall back to chain reads.
+// Thin client for the Graph node. Callers should treat a null result as
+// "graph offline" and fall back to chain reads. The endpoint is set from the
+// active network (see setGraphEndpoint) so the same build works local + Sepolia.
 
-const GRAPH_ENDPOINT = 'http://localhost:8000/subgraphs/name/reppit'
+import { GRAPH_ENDPOINTS, LOCAL_CHAIN_ID } from './config'
+
+let graphEndpoint = GRAPH_ENDPOINTS[LOCAL_CHAIN_ID]
+
+export function setGraphEndpoint(chainId: number) {
+  graphEndpoint = GRAPH_ENDPOINTS[chainId] || ''
+}
 
 export async function graphQuery<T>(query: string, variables: Record<string, unknown> = {}): Promise<T | null> {
+  if (!graphEndpoint) return null
+
   try {
-    const response = await fetch(GRAPH_ENDPOINT, {
+    const response = await fetch(graphEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, variables }),
@@ -154,6 +163,38 @@ export async function fetchApprovedComments(postId: string): Promise<GraphPendin
     { post: postId }
   )
   return data ? data.pendingComments : null
+}
+
+export type GraphComment = {
+  id: string
+  content: string
+  imageCid: string
+  createdAt: string
+  post: { id: string }
+  author: { id: string; username: string | null }
+}
+
+// Blocks until the graph has indexed up to the given block (or times out /
+// graph is offline). Call after a tx before re-querying graph-backed data,
+// otherwise the refresh races the indexer and reads stale results.
+export async function waitForGraphBlock(blockNumber: number, timeoutMs = 8000): Promise<void> {
+  const start = Date.now()
+
+  while (Date.now() - start < timeoutMs) {
+    const data = await graphQuery<{ _meta: { block: { number: number } } }>('{ _meta { block { number } } }')
+    if (!data) return
+    if (data._meta.block.number >= blockNumber) return
+    await new Promise((resolve) => setTimeout(resolve, 400))
+  }
+}
+
+// Clean on-chain comments across a community (all its posts).
+export async function fetchComments(communityId: string): Promise<GraphComment[] | null> {
+  const data = await graphQuery<{ comments: GraphComment[] }>(
+    `query ($community: String!) { comments(where: { community: $community }, orderBy: createdAt, orderDirection: asc, first: 500) { id content imageCid createdAt post { id } author { id username } } }`,
+    { community: communityId }
+  )
+  return data ? data.comments : null
 }
 
 export async function fetchUserProfile(address: string): Promise<GraphUser | null> {

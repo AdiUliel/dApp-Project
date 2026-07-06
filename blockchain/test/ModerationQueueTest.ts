@@ -162,4 +162,58 @@ describe("DecentralizedForum moderation queue", function () {
         .to.be.revertedWithCustomError(forum, "UserBannedFromCommunity");
     });
   });
+
+  describe("clean on-chain comments (addComment)", function () {
+    async function forumWithPost() {
+      const forum = await forumWithCommunity();
+      await forum.createPost(1n, "cid-post", "a post", "");
+      return forum;
+    }
+
+    it("emits CommentCreated for a member's comment", async function () {
+      const forum = await forumWithPost();
+
+      const tx = await forum.connect(user1).addComment(1n, "great post!", "img-cid");
+      const receipt = await tx.wait();
+      const event = receipt.logs
+        .map((log: any) => { try { return forum.interface.parseLog(log); } catch { return null; } })
+        .find((parsed: any) => parsed && parsed.name === "CommentCreated");
+
+      expect(event, "CommentCreated not emitted").to.not.equal(undefined);
+      expect(event.args[0]).to.equal(1n); // commentId
+      expect(event.args[1]).to.equal(1n); // postId
+      expect(event.args[2]).to.equal(1n); // communityId
+      expect(event.args[3]).to.equal(user1.address);
+      expect(event.args[4]).to.equal("great post!");
+      expect(event.args[5]).to.equal("img-cid");
+    });
+
+    it("assigns incrementing comment ids", async function () {
+      const forum = await forumWithPost();
+      await forum.connect(user1).addComment(1n, "first", "");
+      const tx = await forum.connect(user1).addComment(1n, "second", "");
+      const receipt = await tx.wait();
+      const event = receipt.logs
+        .map((log: any) => { try { return forum.interface.parseLog(log); } catch { return null; } })
+        .find((parsed: any) => parsed && parsed.name === "CommentCreated");
+      expect(event.args[0]).to.equal(2n);
+    });
+
+    it("requires an existing post, membership, no ban, and non-empty content", async function () {
+      const forum = await forumWithPost();
+
+      await expect(forum.connect(user1).addComment(99n, "hello", ""))
+        .to.be.revertedWithCustomError(forum, "PostDoesNotExist");
+
+      await expect(forum.connect(user2).addComment(1n, "hello", ""))
+        .to.be.revertedWithCustomError(forum, "OnlyCommunityMembersAllowed");
+
+      await expect(forum.connect(user1).addComment(1n, "", ""))
+        .to.be.revertedWithCustomError(forum, "EmptyCommentContent");
+
+      await forum.banUser(1n, user1.address);
+      await expect(forum.connect(user1).addComment(1n, "hello", ""))
+        .to.be.revertedWithCustomError(forum, "UserBannedFromCommunity");
+    });
+  });
 });
