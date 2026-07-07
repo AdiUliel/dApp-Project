@@ -216,4 +216,68 @@ describe("DecentralizedForum moderation queue", function () {
         .to.be.revertedWithCustomError(forum, "UserBannedFromCommunity");
     });
   });
+
+  describe("post locking", function () {
+    async function forumWithPost() {
+      const forum = await forumWithCommunity();
+      await forum.createPost(1n, "cid-post", "a post", "");
+      return forum;
+    }
+
+    it("lock blocks new clean and flagged comments; unlock restores them", async function () {
+      const forum = await forumWithPost();
+
+      await expect(forum.lockPost(1n)).to.emit(forum, "PostLocked");
+      expect(await forum.postLocked(1n)).to.equal(true);
+
+      await expect(forum.connect(user1).addComment(1n, "too late", ""))
+        .to.be.revertedWithCustomError(forum, "PostIsLocked");
+      await expect(forum.connect(user1).submitFlaggedComment(1n, "too late", ""))
+        .to.be.revertedWithCustomError(forum, "PostIsLocked");
+
+      await expect(forum.unlockPost(1n)).to.emit(forum, "PostUnlocked");
+      await forum.connect(user1).addComment(1n, "open again", "");
+    });
+
+    it("only moderators can lock/unlock; double lock and unlock of unlocked revert", async function () {
+      const forum = await forumWithPost();
+
+      await expect(forum.connect(user1).lockPost(1n))
+        .to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
+      await expect(forum.unlockPost(1n))
+        .to.be.revertedWithCustomError(forum, "PostNotLocked");
+
+      await forum.lockPost(1n);
+      await expect(forum.lockPost(1n))
+        .to.be.revertedWithCustomError(forum, "PostAlreadyLocked");
+    });
+  });
+
+  describe("comment hiding", function () {
+    async function forumWithComment() {
+      const forum = await forumWithCommunity();
+      await forum.createPost(1n, "cid-post", "a post", "");
+      await forum.connect(user1).addComment(1n, "a comment", "");
+      return forum;
+    }
+
+    it("a moderator of the comment's community can hide it exactly once", async function () {
+      const forum = await forumWithComment();
+
+      await expect(forum.hideComment(1n)).to.emit(forum, "CommentHidden");
+      expect(await forum.commentHidden(1n)).to.equal(true);
+
+      await expect(forum.hideComment(1n))
+        .to.be.revertedWithCustomError(forum, "CommentAlreadyHidden");
+    });
+
+    it("rejects non-moderators and unknown comment ids", async function () {
+      const forum = await forumWithComment();
+
+      await expect(forum.connect(user1).hideComment(1n))
+        .to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
+      await expect(forum.hideComment(99n))
+        .to.be.revertedWithCustomError(forum, "CommentDoesNotExist");
+    });
+  });
 });

@@ -43,6 +43,7 @@ export type GraphPost = {
   upvotes: string
   downvotes: string
   hidden: boolean
+  locked: boolean
   createdAt: string
   community: { id: string; name: string }
   author: { id: string; username: string | null }
@@ -94,6 +95,7 @@ const POST_FIELDS = `
   upvotes
   downvotes
   hidden
+  locked
   createdAt
   community { id name }
   author { id username }
@@ -191,7 +193,7 @@ export async function waitForGraphBlock(blockNumber: number, timeoutMs = 8000): 
 // Clean on-chain comments across a community (all its posts).
 export async function fetchComments(communityId: string): Promise<GraphComment[] | null> {
   const data = await graphQuery<{ comments: GraphComment[] }>(
-    `query ($community: String!) { comments(where: { community: $community }, orderBy: createdAt, orderDirection: asc, first: 500) { id content imageCid createdAt post { id } author { id username } } }`,
+    `query ($community: String!) { comments(where: { community: $community, hidden: false }, orderBy: createdAt, orderDirection: asc, first: 500) { id content imageCid createdAt post { id } author { id username } } }`,
     { community: communityId }
   )
   return data ? data.comments : null

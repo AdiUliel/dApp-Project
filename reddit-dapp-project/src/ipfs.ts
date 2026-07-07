@@ -1,5 +1,37 @@
 const PINATA_JWT = import.meta.env.VITE_PINATA_JWT
-const PINATA_GATEWAY_URL = 'https://gateway.pinata.cloud'
+
+// Pinata's public gateway aggressively rate-limits unauthenticated reads
+// (429s), which showed up as posts falling back to "Post #N" / "..." titles.
+// Reads therefore try several public gateways; the first one that answers
+// becomes preferred so images load from a known-good host too.
+const GATEWAYS = [
+  'https://gateway.pinata.cloud',
+  'https://ipfs.io',
+  'https://dweb.link',
+  'https://w3s.link',
+]
+
+let preferredGateway = GATEWAYS[0]
+
+async function fetchFromAnyGateway(cid: string): Promise<Response> {
+  const ordered = [preferredGateway, ...GATEWAYS.filter((gateway) => gateway !== preferredGateway)]
+  let lastError: unknown = new Error('No IPFS gateway reachable')
+
+  for (const gateway of ordered) {
+    try {
+      const response = await fetch(`${gateway}/ipfs/${cid}`, { signal: AbortSignal.timeout(8000) })
+      if (response.ok) {
+        preferredGateway = gateway
+        return response
+      }
+      lastError = new Error(`IPFS gateway ${gateway} responded ${response.status}`)
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError
+}
 
 // Pins JSON to Pinata so content survives independently of any local machine, and returns its CID.
 export async function addJson(data: unknown): Promise<string> {
@@ -20,14 +52,9 @@ export async function addJson(data: unknown): Promise<string> {
   return result.IpfsHash as string
 }
 
-// Reads JSON back via Pinata's public gateway.
+// Reads JSON back via whichever public gateway answers first.
 export async function getJson<T>(cid: string): Promise<T> {
-  const response = await fetch(`${PINATA_GATEWAY_URL}/ipfs/${cid}`)
-
-  if (!response.ok) {
-    throw new Error(`IPFS gateway request failed with status ${response.status}`)
-  }
-
+  const response = await fetchFromAnyGateway(cid)
   return response.json() as Promise<T>
 }
 
@@ -51,5 +78,5 @@ export async function addFile(file: File): Promise<string> {
 }
 
 export function ipfsUrl(cid: string): string {
-  return `${PINATA_GATEWAY_URL}/ipfs/${cid}`
+  return `${preferredGateway}/ipfs/${cid}`
 }

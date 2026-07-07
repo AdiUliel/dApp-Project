@@ -39,18 +39,20 @@ type Post @entity(immutable: false) {
   upvotes: BigInt!
   downvotes: BigInt!
   hidden: Boolean!
+  locked: Boolean! # locked posts stay visible but accept no new comments
   pending: Boolean!
   rejected: Boolean!
   createdAt: BigInt!
 }
 
-type Comment @entity(immutable: true) {
+type Comment @entity(immutable: false) {
   id: ID! # on-chain comment id
   post: Post!
   community: Community!
   author: User!
   content: String!
   imageCid: String!
+  hidden: Boolean!
   createdAt: BigInt!
 }
 
@@ -94,6 +96,9 @@ enum ActivityType {
   COMMENT_REVIEWED
   COMMENT_SUBMITTED
   COMMENT_CREATED
+  POST_LOCKED
+  POST_UNLOCKED
+  COMMENT_HIDDEN
 }
 
 type Activity @entity(immutable: true) {
@@ -124,6 +129,8 @@ enum NotificationType {
   COMMENT_APPROVED
   COMMENT_REJECTED
   COMMENT_REPLY
+  POST_LOCKED
+  COMMENT_HIDDEN
 }
 
 type Notification @entity(immutable: true) {

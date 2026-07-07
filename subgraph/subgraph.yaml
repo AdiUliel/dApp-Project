@@ -50,6 +50,15 @@ dataSources:
         - event: PostRestored(indexed uint256,indexed uint256,indexed address,uint256)
           handler: handlePostRestored
           receipt: true
+        - event: PostLocked(indexed uint256,indexed uint256,address,uint256)
+          handler: handlePostLocked
+          receipt: true
+        - event: PostUnlocked(indexed uint256,indexed uint256,address,uint256)
+          handler: handlePostUnlocked
+          receipt: true
+        - event: CommentHidden(indexed uint256,indexed uint256,indexed uint256,address,uint256)
+          handler: handleCommentHidden
+          receipt: true
         - event: ModeratorAdded(indexed uint256,indexed address,indexed address,uint256)
           handler: handleModeratorAdded
           receipt: true

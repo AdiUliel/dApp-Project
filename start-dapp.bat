@@ -26,9 +26,11 @@ start "Frontend" cmd /k "cd /d "C:\Users\whate\Desktop\dApp Project\reddit-dapp-
 echo Checking for Docker (The Graph + IPFS stack)...
 docker info >nul 2>&1
 if errorlevel 1 (
-    echo Docker is not running - skipping The Graph. Notifications/search/trending
-    echo will use direct chain reads. To enable the full experience: start Docker
-    echo Desktop, then run subgraph\redeploy-sepolia.bat
+    echo ============================================================
+    echo  WARNING: Docker is not running. The Graph is REQUIRED for
+    echo  notifications, search, trending and profile stats.
+    echo  START DOCKER DESKTOP, then run subgraph\redeploy-sepolia.bat
+    echo ============================================================
 ) else (
     echo Docker found. Starting the Sepolia graph stack ^(graph-node + IPFS + Postgres^)...
     start "Graph Stack (Sepolia)" cmd /k "cd /d "C:\Users\whate\Desktop\dApp Project\subgraph" && redeploy-sepolia.bat"
@@ -38,7 +40,8 @@ echo.
 echo All services started!
 echo  - Frontend: http://localhost:5173
 echo  - MetaMask: switch to the Sepolia network (use YOUR OWN account, never Hardhat test keys)
-echo  - GraphQL (if Docker running): http://localhost:8000/subgraphs/name/reppit-sepolia
+echo  - GraphQL (if Docker running): http://localhost:8100/subgraphs/name/reppit-sepolia
+echo    (the Sepolia graph stack keeps running in Docker even after local dev/resets)
 echo.
 pause
 exit /b 0

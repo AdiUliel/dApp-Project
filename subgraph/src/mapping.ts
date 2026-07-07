@@ -8,6 +8,9 @@ import {
   PostVoted,
   PostHidden,
   PostRestored,
+  PostLocked,
+  PostUnlocked,
+  CommentHidden,
   ModeratorAdded,
   ModeratorRemoved,
   ModeratorRecommended,
@@ -235,6 +238,7 @@ export function handlePostCreated(event: PostCreated): void {
   post.upvotes = ZERO
   post.downvotes = ZERO
   post.hidden = false
+  post.locked = false
   post.pending = false
   post.rejected = false
   post.createdAt = event.params.createdAt
@@ -309,6 +313,52 @@ export function handlePostHidden(event: PostHidden): void {
   const authorAddress = Address.fromString(post.author)
   if (!authorAddress.equals(event.params.hiddenBy)) {
     notify(event, authorAddress, 'POST_HIDDEN', event.params.hiddenBy, event.params.postId, post.title)
+  }
+}
+
+export function handlePostLocked(event: PostLocked): void {
+  const post = Post.load(event.params.postId.toString())
+  if (post == null) {
+    return
+  }
+
+  post.locked = true
+  post.save()
+
+  recordActivity(event, event.params.lockedBy, 'POST_LOCKED', event.params.postId, post.title)
+
+  const authorAddress = Address.fromString(post.author)
+  if (!authorAddress.equals(event.params.lockedBy)) {
+    notify(event, authorAddress, 'POST_LOCKED', event.params.lockedBy, event.params.postId, post.title)
+  }
+}
+
+export function handlePostUnlocked(event: PostUnlocked): void {
+  const post = Post.load(event.params.postId.toString())
+  if (post == null) {
+    return
+  }
+
+  post.locked = false
+  post.save()
+
+  recordActivity(event, event.params.unlockedBy, 'POST_UNLOCKED', event.params.postId, post.title)
+}
+
+export function handleCommentHidden(event: CommentHidden): void {
+  const comment = Comment.load(event.params.commentId.toString())
+  if (comment == null) {
+    return
+  }
+
+  comment.hidden = true
+  comment.save()
+
+  recordActivity(event, event.params.hiddenBy, 'COMMENT_HIDDEN', event.params.commentId, comment.content)
+
+  const authorAddress = Address.fromString(comment.author)
+  if (!authorAddress.equals(event.params.hiddenBy)) {
+    notify(event, authorAddress, 'COMMENT_HIDDEN', event.params.hiddenBy, event.params.commentId, comment.content)
   }
 }
 
@@ -479,6 +529,7 @@ export function handleCommentCreated(event: CommentCreated): void {
   comment.author = getOrCreateUser(event.params.author).id
   comment.content = event.params.content
   comment.imageCid = event.params.imageCid
+  comment.hidden = false
   comment.createdAt = event.params.createdAt
   comment.save()
 

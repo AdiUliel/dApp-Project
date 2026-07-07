@@ -74,8 +74,12 @@ type Post = {
   contentCID: string
   createdAt: string
   hidden: boolean
+  locked: boolean
   pending: boolean
   rejected: boolean
+  // Optimistic placeholder shown while the tx is confirming on-chain; replaced
+  // by the canonical post once the graph indexes it.
+  confirming?: boolean
 }
 
 type PostMetadata = {
@@ -105,6 +109,8 @@ type OnChainComment = {
   imageCid: string
   createdAt: number
   status: number
+  // Optimistic placeholder shown while the tx is confirming on-chain.
+  confirming?: boolean
 }
 
 type VoteInfo = {
@@ -185,6 +191,53 @@ function App() {
   const [lang, setLang] = useState<Language>(loadLanguage)
   const t = useMemo(() => makeTranslator(lang), [lang])
 
+  // Turns an ethers error into a human-readable reason: user rejection,
+  // a decoded custom error from the contract (mapped through i18n), or the
+  // provider's short message as a last resort.
+  const describeTxError = (error: unknown): string => {
+    const err = error as {
+      code?: string
+      data?: unknown
+      reason?: string
+      shortMessage?: string
+      revert?: { name?: string }
+      info?: { error?: { data?: unknown } }
+    }
+
+    if (err?.code === 'ACTION_REJECTED') return t('err_userRejected')
+
+    let name = err?.revert?.name || ''
+    const data = typeof err?.data === 'string' ? err.data : (err?.info?.error?.data as string | undefined)
+    if (!name && data && data !== '0x') {
+      try {
+        name = new ethers.Interface(contractArtifact.abi).parseError(data)?.name || ''
+      } catch {
+        // Unknown selector - fall through to the generic message.
+      }
+    }
+    if (!name && err?.reason && err.reason !== 'require(false)') name = err.reason
+
+    if (name) {
+      const key = `err_${name}` as TranslationKey
+      const label = t(key)
+      return label === key ? name : label
+    }
+
+    // No decodable revert reason at all. This contract always reverts with
+    // custom errors (which carry data), so a data-less CALL_EXCEPTION means
+    // the deployed contract doesn't have the function we called. Providers
+    // surface this differently: data undefined/"0x", hardhat's
+    // "require(false)" reason, or MetaMask's "missing revert data" message.
+    if (err?.code === 'CALL_EXCEPTION') return t('err_missingFunction')
+
+    return err?.shortMessage || err?.reason || String(error)
+  }
+
+  // Standard failure alert: what failed + why.
+  const failWith = (key: TranslationKey, error: unknown) => {
+    alert(`${t(key)}\n${describeTxError(error)}`)
+  }
+
   const [walletAddress, setWalletAddress] = useState('')
   const [contractAddress, setContractAddress] = useState('')
   const [statusMessage, setStatusMessage] = useState('')
@@ -250,6 +303,8 @@ function App() {
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const [readNotificationIds, setReadNotificationIds] = useState<string[]>([])
   const [showNotificationsPanel, setShowNotificationsPanel] = useState(false)
+  // Which kebab (three-dot moderator menu) is open: `post-<id>` or `comment-<id>`.
+  const [openKebabId, setOpenKebabId] = useState<string | null>(null)
 
   // Deployment fingerprint (genesis block hash) that scopes localStorage keys,
   // so off-chain comments and read-notification marks from an older chain
@@ -286,7 +341,9 @@ function App() {
 
   const pendingPosts = useMemo(() => posts.filter((post) => post.pending), [posts])
 
-  const selectedPost = visiblePosts.find((post) => post.id === selectedPostId) || visiblePosts[0]
+  // Strictly explicit selection: clicking a post expands it, clicking again
+  // collapses it (no implicit fallback to the first post).
+  const selectedPost = visiblePosts.find((post) => post.id === selectedPostId)
 
   const rankedTrending = useMemo(() => {
     const memberCommunityIds = new Set(communities.filter((c) => c.isMember).map((c) => c.id))
@@ -368,6 +425,14 @@ function App() {
       loadNotifications(walletAddress)
     }
   }, [walletAddress, storageScope])
+
+  // Clicking anywhere outside a kebab menu closes it.
+  useEffect(() => {
+    if (!openKebabId) return
+    const close = () => setOpenKebabId(null)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [openKebabId])
 
   // Without polling, votes/comments made by others while the tab is open never
   // reach the bell — the author had to reload to see them.
@@ -777,7 +842,7 @@ function App() {
       setTemporaryStatus(t('registered', { name }))
     } catch (error) {
       console.error('Username registration failed:', error)
-      alert(t('registerFailed'))
+      failWith('registerFailed', error)
     }
   }
 
@@ -806,7 +871,7 @@ function App() {
       if (view === 'profile') loadProfileData(profileAddress)
     } catch (error) {
       console.error('Username change failed:', error)
-      alert(t('changeFailed'))
+      failWith('changeFailed', error)
     }
   }
 
@@ -963,9 +1028,11 @@ function App() {
 
       for (const id of postIds) {
         const post = await contract.getPost(id)
-        const [pending, rejected] = await Promise.all([
+        const [pending, rejected, locked] = await Promise.all([
           contract.postPendingReview(id),
           contract.postRejected(id),
+          // Older deployments predate postLocked; treat a failed call as unlocked.
+          contract.postLocked(id).catch(() => false),
         ])
 
         loadedPosts.push({
@@ -975,6 +1042,7 @@ function App() {
           contentCID: post[3],
           createdAt: post[4].toString(),
           hidden: post[6],
+          locked: Boolean(locked),
           pending,
           rejected,
         })
@@ -1052,10 +1120,23 @@ function App() {
       // Bounded log scan keeps this cheap on public RPCs.
       const latest = await provider.getBlockNumber()
       const fromBlock = Math.max(0, latest - 50000)
+
+      const hiddenCommentIds = new Set<string>()
+      try {
+        const hiddenEvents = await contract.queryFilter(contract.filters.CommentHidden(), fromBlock, latest)
+        for (const event of hiddenEvents) {
+          const args = (event as ethers.EventLog).args
+          if (args) hiddenCommentIds.add(args[0].toString())
+        }
+      } catch {
+        // Older deployments have no CommentHidden event.
+      }
+
       const events = await contract.queryFilter(contract.filters.CommentCreated(), fromBlock, latest)
       for (const event of events) {
         const args = (event as ethers.EventLog).args
         if (!args) continue
+        if (hiddenCommentIds.has(args[0].toString())) continue
         const postId = args[1].toString()
         if (!postIds.has(postId)) continue
         shown.push({
@@ -1231,6 +1312,15 @@ function App() {
     setReadNotificationIds(ids)
   }
 
+  // Clicking a single notification marks just that one as read.
+  const markNotificationRead = (id: string) => {
+    if (readNotificationIds.includes(id)) return
+    const ids = [...readNotificationIds, id]
+    const key = scopedStorageKey(READ_NOTIFICATIONS_KEY)
+    if (key) localStorage.setItem(key, JSON.stringify(ids))
+    setReadNotificationIds(ids)
+  }
+
   // Merges on-chain notifications from the subgraph with comment replies found
   // in this browser's localStorage (comments are off-chain, so replies from
   // other machines are not visible here).
@@ -1279,7 +1369,9 @@ function App() {
   const loadProfileData = async (address: string) => {
     const [profile, activities] = await Promise.all([fetchUserProfile(address), fetchUserActivities(address, 30)])
 
-    setProfileGraphOffline(profile === null && activities === null)
+    // activities === null means graphQuery failed (endpoint down); a missing
+    // user entity (profile null) with activities [] just means a fresh account.
+    setProfileGraphOffline(activities === null)
     setProfileData(profile)
     setProfileActivities(activities || [])
 
@@ -1321,7 +1413,7 @@ function App() {
       setTemporaryStatus(t('communityCreated', { name: communityName }))
     } catch (error) {
       console.error('Community creation failed:', error)
-      alert(t('createCommunityFailed'))
+      failWith('createCommunityFailed', error)
     }
   }
 
@@ -1358,7 +1450,7 @@ function App() {
       setTemporaryStatus(t('subCreated', { name: subName }))
     } catch (error) {
       console.error('Sub-community creation failed:', error)
-      alert(t('subFailed'))
+      failWith('subFailed', error)
     }
   }
 
@@ -1376,7 +1468,36 @@ function App() {
       setTemporaryStatus(t('joined'))
     } catch (error) {
       console.error('Failed to join community:', error)
-      alert(t('joinFailed'))
+      failWith('joinFailed', error)
+    }
+  }
+
+  // Optimistic placeholders use this id prefix until the chain confirms them.
+  const isTempId = (id: string) => id.startsWith('pending-')
+
+  // Runs AFTER a write tx is already in the mempool: waits for confirmation and
+  // for the graph to index it, then reloads canonical state - which replaces any
+  // optimistic placeholder with the real entity. Kept off the UI thread so the
+  // user never stares at a spinner during block time. On failure it reloads too,
+  // dropping the placeholder, and surfaces the decoded revert reason.
+  const reconcileAfterTx = async (
+    tx: ethers.ContractTransactionResponse,
+    communityId: string,
+    account: string,
+    successMessage: string,
+    failKey: TranslationKey,
+  ) => {
+    try {
+      const receipt = await tx.wait()
+      if (receipt) await waitForGraphBlock(receipt.blockNumber)
+      await loadPosts(communityId)
+      await loadCommunities(account)
+      await loadModeratorInfo(communityId)
+      setTemporaryStatus(successMessage)
+    } catch (error) {
+      console.error('Transaction reconciliation failed:', error)
+      await loadPosts(communityId).catch(() => {})
+      failWith(failKey, error)
     }
   }
 
@@ -1434,21 +1555,51 @@ function App() {
         ? await contract.createFlaggedPost(selectedCommunityId, contentCID, title, tags.join(','))
         : await contract.createPost(selectedCommunityId, contentCID, title, tags.join(','))
 
-      setTemporaryStatus(t('postSent'))
-      await tx.wait()
+      const account = liveStatus.account
+      const communityId = selectedCommunityId
 
       setPostTitle('')
       setPostBody('')
       setPostTags('')
       setPostImages([])
       setShowCreatePost(false)
-      await loadPosts(selectedCommunityId)
-      await loadCommunities(liveStatus.account)
-      await loadModeratorInfo(selectedCommunityId)
-      setTemporaryStatus(flagged ? t('postSubmittedForReview') : t('postPublished'))
+
+      if (flagged) {
+        // Flagged posts go to the moderator queue, not the feed - just confirm.
+        setTemporaryStatus(t('postSubmittedForReview'))
+      } else {
+        // The tx is in the mempool. Show the post immediately - its content is
+        // already in ipfsCache from publishToIpfs, so it renders in full with no
+        // gateway round-trip - while it confirms on-chain in the background.
+        const tempId = `pending-${Date.now()}`
+        setPosts((prev) => [
+          {
+            id: tempId,
+            communityId,
+            author: account,
+            contentCID,
+            createdAt: String(Math.floor(Date.now() / 1000)),
+            hidden: false,
+            locked: false,
+            pending: false,
+            rejected: false,
+            confirming: true,
+          },
+          ...prev,
+        ])
+        setTemporaryStatus(t('postConfirming'))
+      }
+
+      void reconcileAfterTx(
+        tx,
+        communityId,
+        account,
+        flagged ? t('postSubmittedForReview') : t('postPublished'),
+        'postFailed',
+      )
     } catch (error) {
       console.error('Post creation failed:', error)
-      alert(t('postFailed'))
+      failWith('postFailed', error)
     }
   }
 
@@ -1470,6 +1621,9 @@ function App() {
 
   // Optimistic vote: update the UI immediately, then reconcile with the chain.
   const castVote = async (postId: string, direction: 1 | -1) => {
+    // Can't vote on a post that hasn't confirmed on-chain yet.
+    if (postId.startsWith('pending-')) return
+
     const current = votesByPost[postId] || { score: 0, myVote: 0 }
     const newVote = current.myVote === direction ? 0 : direction
 
@@ -1488,7 +1642,7 @@ function App() {
     } catch (error) {
       console.error('Vote failed:', error)
       setVotesByPost((prev) => ({ ...prev, [postId]: current }))
-      alert(t('voteFailed'))
+      failWith('voteFailed', error)
     }
   }
 
@@ -1596,7 +1750,7 @@ function App() {
       await loadModeratorInfo(selectedCommunityId)
     } catch (error) {
       console.error('Moderator recommendation failed:', error)
-      alert(t('recommendationFailed'))
+      failWith('recommendationFailed', error)
     }
   }
 
@@ -1610,7 +1764,7 @@ function App() {
       if (communityId === selectedCommunityId) await loadModeratorInfo(communityId)
     } catch (error) {
       console.error('Accepting moderator role failed:', error)
-      alert(t('offerActionFailed'))
+      failWith('offerActionFailed', error)
     }
   }
 
@@ -1624,7 +1778,7 @@ function App() {
       await loadCommunities()
     } catch (error) {
       console.error('Declining moderator role failed:', error)
-      alert(t('offerActionFailed'))
+      failWith('offerActionFailed', error)
     }
   }
 
@@ -1641,7 +1795,7 @@ function App() {
       if (communityId === selectedCommunityId) await loadModeratorInfo(communityId)
     } catch (error) {
       console.error('Resignation failed:', error)
-      alert(t('resignFailed'))
+      failWith('resignFailed', error)
     }
   }
 
@@ -1667,7 +1821,7 @@ function App() {
       await loadModeratorInfo(selectedCommunityId)
     } catch (error) {
       console.error('Removal proposal failed:', error)
-      alert(t('removalFailed'))
+      failWith('removalFailed', error)
     }
   }
 
@@ -1681,7 +1835,7 @@ function App() {
       if (selectedCommunityId) await loadModeratorInfo(selectedCommunityId)
     } catch (error) {
       console.error('Removal approval failed:', error)
-      alert(t('removalApprovalFailed'))
+      failWith('removalApprovalFailed', error)
     }
   }
 
@@ -1696,7 +1850,7 @@ function App() {
       setTemporaryStatus(t('postHiddenToast'))
     } catch (error) {
       console.error('Failed to hide post:', error)
-      alert(t('hideFailed'))
+      failWith('hideFailed', error)
     }
   }
 
@@ -1711,7 +1865,42 @@ function App() {
       setTemporaryStatus(t('postRestoredToast'))
     } catch (error) {
       console.error('Failed to restore post:', error)
-      alert(t('restoreFailed'))
+      failWith('restoreFailed', error)
+    }
+  }
+
+  // Lock keeps the post visible but blocks new comments; unlock reopens it.
+  const setPostLock = async (postId: string, lock: boolean) => {
+    try {
+      const contract = await getContract(true)
+      const tx = lock ? await contract.lockPost(postId) : await contract.unlockPost(postId)
+
+      setTemporaryStatus(t('txSent'))
+      const receipt = await tx.wait()
+      await waitForGraphBlock(receipt.blockNumber)
+      await loadPosts(selectedCommunityId)
+      setTemporaryStatus(t(lock ? 'postLockedToast' : 'postUnlockedToast'))
+    } catch (error) {
+      console.error('Failed to change post lock:', error)
+      failWith('lockFailed', error)
+    }
+  }
+
+  // Hides a regular on-chain comment (ids prefixed c- in the merged list).
+  const hideChainComment = async (commentId: string) => {
+    const numericId = commentId.replace(/^c-/, '')
+    try {
+      const contract = await getContract(true)
+      const tx = await contract.hideComment(numericId)
+
+      setTemporaryStatus(t('txSent'))
+      const receipt = await tx.wait()
+      await waitForGraphBlock(receipt.blockNumber)
+      await loadPosts(selectedCommunityId)
+      setTemporaryStatus(t('commentHiddenToast'))
+    } catch (error) {
+      console.error('Failed to hide comment:', error)
+      failWith('hideFailed', error)
     }
   }
 
@@ -1726,7 +1915,7 @@ function App() {
       setTemporaryStatus(approved ? t('postApprovedToast') : t('postRejectedToast'))
     } catch (error) {
       console.error('Moderation decision failed:', error)
-      alert(t('decisionFailed'))
+      failWith('decisionFailed', error)
     }
   }
 
@@ -1743,7 +1932,7 @@ function App() {
       setTemporaryStatus(approved ? t('commentApprovedToast') : t('commentRejectedToast'))
     } catch (error) {
       console.error('Moderation decision failed:', error)
-      alert(t('decisionFailed'))
+      failWith('decisionFailed', error)
     }
   }
 
@@ -1776,7 +1965,7 @@ function App() {
       setTemporaryStatus(t('commentSubmittedForReview'))
     } catch (error) {
       console.error('Flagged comment submission failed:', error)
-      alert(t('commentSubmitFailed'))
+      failWith('commentSubmitFailed', error)
     }
   }
 
@@ -1829,18 +2018,34 @@ function App() {
     try {
       const contract = await getContract(true)
       const tx = await contract.addComment(postId, content, imageCid)
-      setTemporaryStatus(t('postSent'))
-      const receipt = await tx.wait()
 
+      const account = liveStatus.account
+      const communityId = selectedCommunityId
+
+      // Show the comment the instant the tx is submitted - the content is what
+      // the user just typed, so nothing needs to be fetched.
+      const tempId = `pending-${Date.now()}`
+      setOnChainComments((previous) => [
+        ...previous,
+        {
+          id: tempId,
+          postId,
+          author: account,
+          content,
+          imageCid,
+          createdAt: Math.floor(Date.now() / 1000),
+          status: 1,
+          confirming: true,
+        },
+      ])
       setNewCommentByPost((previous) => ({ ...previous, [postId]: '' }))
       setCommentImageByPost((previous) => ({ ...previous, [postId]: undefined }))
-      // Give the indexer time to catch up, or the refresh reads stale data.
-      await waitForGraphBlock(receipt.blockNumber)
-      await loadPosts(selectedCommunityId)
-      setTemporaryStatus(t('commentPostedOnChain'))
+      setTemporaryStatus(t('commentConfirming'))
+
+      void reconcileAfterTx(tx, communityId, account, t('commentPostedOnChain'), 'commentSubmitFailed')
     } catch (error) {
       console.error('On-chain comment failed:', error)
-      alert(t('commentSubmitFailed'))
+      failWith('commentSubmitFailed', error)
     }
   }
 
@@ -1940,6 +2145,17 @@ function App() {
 
   const renderVoteBox = (postId: string) => {
     const voteInfo = votesByPost[postId] || { score: 0, myVote: 0 }
+    // A confirming (optimistic) post has no on-chain id yet - show the score
+    // static so a stray click doesn't fire a doomed transaction.
+    if (isTempId(postId)) {
+      return (
+        <div className="post-vote-box vote-box-static">
+          <span className="vote-button-disabled">▲</span>
+          <strong>{voteInfo.score}</strong>
+          <span className="vote-button-disabled">▼</span>
+        </div>
+      )
+    }
 
     return (
       <div className="post-vote-box">
@@ -2268,12 +2484,15 @@ function App() {
 
               return (
                 <article
-                  className={`post-card panel ${post.hidden && !post.pending ? 'hidden-post' : ''} ${isSelected ? 'selected' : ''}`}
+                  className={`post-card panel ${post.hidden && !post.pending ? 'hidden-post' : ''} ${isSelected ? 'selected' : ''} ${post.confirming ? 'confirming-post' : ''}`}
                   key={post.id}
                 >
                   {renderVoteBox(post.id)}
                   <div className="post-card-body">
-                    <button className="post-content-button" onClick={() => setSelectedPostId(post.id)}>
+                    <button
+                      className="post-content-button"
+                      onClick={() => setSelectedPostId((previous) => (previous === post.id ? '' : post.id))}
+                    >
                       <div className="post-main-content">
                         <div className="post-meta-line">
                           <span>r/{selectedCommunity.name}</span>
@@ -2294,6 +2513,8 @@ function App() {
                         )}
                         <div className="post-actions-line">
                           <span>{t('commentsCount', { count: totalComments })}</span>
+                          {post.confirming && <span className="badge info">⏳ {t('confirmingBadge')}</span>}
+                          {post.locked && <span className="badge warning">🔒 {t('lockedBadge')}</span>}
                           {post.pending && <span className="badge warning">{t('pendingBadge')}</span>}
                           {post.rejected && <span className="badge danger">{t('rejectedBadge')}</span>}
                           {post.hidden && !post.pending && !post.rejected && (
@@ -2303,16 +2524,40 @@ function App() {
                       </div>
                     </button>
 
-                    {selectedCommunity.isModerator && !post.pending && !post.rejected && (
-                      <div className="moderator-actions">
-                        {post.hidden ? (
-                          <button className="ghost-button" onClick={() => restorePost(post.id)}>
-                            {t('restorePost')}
-                          </button>
-                        ) : (
-                          <button className="danger-button" onClick={() => hidePost(post.id)}>
-                            {t('hidePostButton')}
-                          </button>
+                    {selectedCommunity.isModerator && !post.pending && !post.rejected && !post.confirming && (
+                      <div className="kebab-wrapper post-kebab">
+                        <button
+                          className="kebab-button"
+                          aria-label={t('modActionsMenu')}
+                          title={t('modActionsMenu')}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setOpenKebabId(openKebabId === `post-${post.id}` ? null : `post-${post.id}`)
+                          }}
+                        >
+                          ⋮
+                        </button>
+                        {openKebabId === `post-${post.id}` && (
+                          <div className="kebab-menu">
+                            {post.hidden ? (
+                              <button onClick={() => { setOpenKebabId(null); restorePost(post.id) }}>
+                                {t('restorePost')}
+                              </button>
+                            ) : (
+                              <button className="danger" onClick={() => { setOpenKebabId(null); hidePost(post.id) }}>
+                                {t('hidePostButton')}
+                              </button>
+                            )}
+                            {post.locked ? (
+                              <button onClick={() => { setOpenKebabId(null); setPostLock(post.id, false) }}>
+                                {t('unlockPostAction')}
+                              </button>
+                            ) : (
+                              <button onClick={() => { setOpenKebabId(null); setPostLock(post.id, true) }}>
+                                {t('lockPostAction')}
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
@@ -2325,11 +2570,39 @@ function App() {
                         ) : (
                           <div className="comments-list">
                             {chainComments.map((comment) => (
-                              <div className="comment-item" key={`chain-${comment.id}`}>
+                              <div className={`comment-item ${comment.confirming ? 'confirming-comment' : ''}`} key={`chain-${comment.id}`}>
+                                {selectedCommunity.isModerator && comment.id.startsWith('c-') && (
+                                  <div className="kebab-wrapper comment-kebab">
+                                    <button
+                                      className="kebab-button"
+                                      aria-label={t('modActionsMenu')}
+                                      title={t('modActionsMenu')}
+                                      onClick={(event) => {
+                                        event.stopPropagation()
+                                        setOpenKebabId(
+                                          openKebabId === `comment-${comment.id}` ? null : `comment-${comment.id}`
+                                        )
+                                      }}
+                                    >
+                                      ⋮
+                                    </button>
+                                    {openKebabId === `comment-${comment.id}` && (
+                                      <div className="kebab-menu">
+                                        <button
+                                          className="danger"
+                                          onClick={() => { setOpenKebabId(null); hideChainComment(comment.id) }}
+                                        >
+                                          {t('hideCommentAction')}
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                                 <p className="rich-text">{renderRichText(comment.content)}</p>
                                 {comment.imageCid && <img className="post-image" src={ipfsUrl(comment.imageCid)} alt="" />}
                                 <small>
-                                  {formatUser(comment.author)} · {formatDate(comment.createdAt)} · {t('onChainComment')}
+                                  {formatUser(comment.author)} · {formatDate(comment.createdAt)} ·{' '}
+                                  {comment.confirming ? t('commentConfirmingLabel') : t('onChainComment')}
                                 </small>
                               </div>
                             ))}
@@ -2346,47 +2619,53 @@ function App() {
                           </div>
                         )}
 
-                        <Composer
-                          rich
-                          placeholder={t('commentPh')}
-                          value={newCommentByPost[post.id] || ''}
-                          onChange={(value) =>
-                            setNewCommentByPost((previous) => ({ ...previous, [post.id]: value }))
-                          }
-                        />
-                        <label className="file-input-label">
-                          {t('attachCommentImage')}
-                          <input
-                            type="file"
-                            accept="image/png,image/jpeg,image/gif,image/webp"
-                            onChange={(event) => {
-                              const file = event.target.files?.[0]
-                              setCommentImageByPost((previous) => ({ ...previous, [post.id]: file }))
-                              event.target.value = ''
-                            }}
-                          />
-                        </label>
-                        {commentImageByPost[post.id] && (
-                          <div className="image-previews">
-                            <div className="image-preview">
-                              <img
-                                src={URL.createObjectURL(commentImageByPost[post.id] as File)}
-                                alt={commentImageByPost[post.id]?.name}
+                        {post.locked ? (
+                          <p className="muted-text locked-notice">🔒 {t('lockedNotice')}</p>
+                        ) : (
+                          <>
+                            <Composer
+                              rich
+                              placeholder={t('commentPh')}
+                              value={newCommentByPost[post.id] || ''}
+                              onChange={(value) =>
+                                setNewCommentByPost((previous) => ({ ...previous, [post.id]: value }))
+                              }
+                            />
+                            <label className="file-input-label">
+                              {t('attachCommentImage')}
+                              <input
+                                type="file"
+                                accept="image/png,image/jpeg,image/gif,image/webp"
+                                onChange={(event) => {
+                                  const file = event.target.files?.[0]
+                                  setCommentImageByPost((previous) => ({ ...previous, [post.id]: file }))
+                                  event.target.value = ''
+                                }}
                               />
-                              <button
-                                className="ghost-button"
-                                onClick={() =>
-                                  setCommentImageByPost((previous) => ({ ...previous, [post.id]: undefined }))
-                                }
-                              >
-                                {t('removeImage')}
-                              </button>
-                            </div>
-                          </div>
+                            </label>
+                            {commentImageByPost[post.id] && (
+                              <div className="image-previews">
+                                <div className="image-preview">
+                                  <img
+                                    src={URL.createObjectURL(commentImageByPost[post.id] as File)}
+                                    alt={commentImageByPost[post.id]?.name}
+                                  />
+                                  <button
+                                    className="ghost-button"
+                                    onClick={() =>
+                                      setCommentImageByPost((previous) => ({ ...previous, [post.id]: undefined }))
+                                    }
+                                  >
+                                    {t('removeImage')}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                            <button className="secondary-button full" onClick={() => submitComment(post.id)}>
+                              {t('sendComment')}
+                            </button>
+                          </>
                         )}
-                        <button className="secondary-button full" onClick={() => submitComment(post.id)}>
-                          {t('sendComment')}
-                        </button>
                       </div>
                     )}
                   </div>
@@ -2571,7 +2850,17 @@ function App() {
         {notifications.map((notification) => {
           const isRead = readNotificationIds.includes(notification.id)
           return (
-            <div className={`notification-item ${isRead ? '' : 'unread'}`} key={notification.id}>
+            <div
+              className={`notification-item ${isRead ? '' : 'unread clickable'}`}
+              key={notification.id}
+              role="button"
+              tabIndex={0}
+              title={isRead ? undefined : t('clickToMarkRead')}
+              onClick={() => markNotificationRead(notification.id)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') markNotificationRead(notification.id)
+              }}
+            >
               <strong>{notifLabel(notification.type)}</strong>
               <small>
                 {notification.detail && `"${notification.detail}" · `}
@@ -2857,22 +3146,6 @@ function App() {
                             )}
                           </div>
 
-                          {selectedCommunity.isMember && (
-                            <div className="recommend-box">
-                              <strong>{t('recommendTitle')}</strong>
-                              <p className="muted-text">{t('recommendBody')}</p>
-                              <input
-                                type="text"
-                                placeholder={t('recommendPh')}
-                                value={recommendInput}
-                                onChange={(event) => setRecommendInput(event.target.value)}
-                              />
-                              <button className="secondary-button full" onClick={recommendModerator}>
-                                {t('recommendButton')}
-                              </button>
-                            </div>
-                          )}
-
                           {selectedCommunity.isModerator && (
                             <button
                               className="ghost-button full action-trigger"
@@ -2902,8 +3175,6 @@ function App() {
                             <strong>{votesByPost[selectedPost.id]?.score ?? 0}</strong>
                             <span>{t('commentsLabel')}</span>
                             <strong>{commentsForPost(selectedPost.id).length + onChainCommentsForPost(selectedPost.id).length}</strong>
-                            <span>{t('storageLabel')}</span>
-                            <strong>IPFS</strong>
                           </div>
                         </>
                       ) : (
@@ -3029,6 +3300,20 @@ function App() {
           {showModeratorActionsModal && selectedCommunity && (
             <Modal title={t('moderatorActions')} onClose={() => setShowModeratorActionsModal(false)}>
               <div className="governance-tools">
+                <div className="recommend-box">
+                  <strong>{t('recommendTitle')}</strong>
+                  <p className="muted-text">{t('recommendBody')}</p>
+                  <input
+                    type="text"
+                    placeholder={t('recommendPh')}
+                    value={recommendInput}
+                    onChange={(event) => setRecommendInput(event.target.value)}
+                  />
+                  <button className="secondary-button full" onClick={recommendModerator}>
+                    {t('recommendButton')}
+                  </button>
+                </div>
+
                 <p className="muted-text">{t('removalIntro')}</p>
                 <input
                   type="text"

@@ -144,22 +144,24 @@ describe("DecentralizedForum", function () {
 
       await forum.recommendModerator(1n, user1.address);
 
-      // A single recommendation is below MODERATOR_RECOMMENDATIONS_REQUIRED,
-      // so the candidate is not a moderator yet and has no pending offer.
+      // The creator is the sole moderator, so one recommendation reaches the
+      // adaptive threshold and opens an offer - but the role is only granted
+      // once the candidate accepts.
       expect(await forum.isUserModeratorOfCommunity(1n, user1.address)).to.equal(false);
       expect(await forum.hasRecommendedModerator(1n, user1.address, owner.address)).to.equal(true);
-      expect(await forum.hasPendingModeratorOffer(1n, user1.address)).to.equal(false);
+      expect(await forum.hasPendingModeratorOffer(1n, user1.address)).to.equal(true);
     });
 
-    it("should not allow a non-member to recommend a moderator", async function () {
+    it("should not allow a non-moderator member to recommend a moderator", async function () {
       const forum = await deployForum();
 
       await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
+      await forum.connect(user2).joinCommunity(1n);
 
       await expect(
         forum.connect(user2).recommendModerator(1n, user1.address)
-      ).to.be.revertedWithCustomError(forum, "OnlyCommunityMembersAllowed");
+      ).to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
     });
 
     it("should allow moderator to ban and unban users", async function () {

@@ -1,16 +1,20 @@
-# Graph stack indexing PUBLIC SEPOLIA instead of the local Hardhat chain.
-# Run via redeploy-sepolia.bat (or: docker compose -f docker-compose.sepolia.yml up -d).
-# Uses a separate Postgres volume so switching local <-> sepolia never corrupts
-# the other network's index. Only one stack runs at a time (same ports).
+# Graph stack indexing PUBLIC SEPOLIA. Runs SIDE BY SIDE with the local stack:
+# its own compose project name, its own ports (8100/8120/5101/5442) and its own
+# Postgres volume, so `redeploy.bat` / `docker compose down -v` for local dev can
+# never stop or wipe it. All services auto-restart with Docker Desktop.
+# Start via redeploy-sepolia.bat.
+name: reppit-graph-sepolia
+
 services:
   graph-node:
     image: graphprotocol/graph-node:latest
+    restart: unless-stopped
     ports:
-      - '8000:8000' # GraphQL HTTP queries
-      - '8001:8001' # GraphQL WebSocket
-      - '8020:8020' # Admin JSON-RPC (graph deploy)
-      - '8030:8030' # Index node status
-      - '8040:8040' # Metrics
+      - '8100:8000' # GraphQL HTTP queries
+      - '8101:8001' # GraphQL WebSocket
+      - '8120:8020' # Admin JSON-RPC (graph deploy)
+      - '8130:8030' # Index node status
+      - '8140:8040' # Metrics
     depends_on:
       - ipfs
       - postgres
@@ -30,12 +34,14 @@ services:
       GRAPH_ALLOW_NON_DETERMINISTIC_FULLTEXT_SEARCH: 'true'
   ipfs:
     image: ipfs/kubo:v0.34.1
+    restart: unless-stopped
     ports:
-      - '5001:5001'
+      - '5101:5001'
   postgres:
     image: postgres:16
+    restart: unless-stopped
     ports:
-      - '5432:5432'
+      - '5442:5432'
     command: ['postgres', '-cshared_preload_libraries=pg_stat_statements', '-cmax_connections=200']
     environment:
       POSTGRES_USER: graph-node

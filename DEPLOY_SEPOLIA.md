@@ -1,8 +1,10 @@
 # Deploying Reppit to Sepolia (public testnet)
 
-> **LIVE DEPLOYMENT (2026-07-06):** the contract is deployed and verified working at
-> **`0xddCC23D3051de84c546f9d8DaA3f25795fb9502B`**
-> (https://sepolia.etherscan.io/address/0xddCC23D3051de84c546f9d8DaA3f25795fb9502B).
+> **LIVE DEPLOYMENT v2 (2026-07-06):** the contract is deployed and verified working at
+> **`0x49eEDCBdd425Df634A3c11405eE139f446d6141a`**
+> (https://sepolia.etherscan.io/address/0x49eEDCBdd425Df634A3c11405eE139f446d6141a).
+> v2 adds moderator-only recommendations (adaptive threshold), post locking, and
+> on-chain comment hiding. The previous v1 forum at `0xddCC...502B` is abandoned.
 > This address is baked into `reddit-dapp-project/src/config.ts` as the default, so
 > teammates only need `git pull` + `npm run dev` + MetaMask on Sepolia.
 > The steps below are for reference / future redeployments.

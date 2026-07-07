@@ -119,6 +119,13 @@ contract DecentralizedForum {
     // Graph) so they cost minimal bytecode and still flow through the dApp.
     uint256 private nextCommentId = 1;
 
+    // Locked posts stay visible but accept no new comments (clean or flagged).
+    mapping(uint256 => bool) public postLocked;
+    // commentId -> postId, recorded at creation so hideComment can verify the
+    // caller moderates the community the comment actually belongs to.
+    mapping(uint256 => uint256) private commentPostIds;
+    mapping(uint256 => bool) public commentHidden;
+
     // ERRORS //
     error CommunityDoesNotExist();
     error PostDoesNotExist();
@@ -150,6 +157,10 @@ contract DecentralizedForum {
     error NoPendingModeratorOffer();
     error PostAlreadyHidden();
     error PostNotHidden();
+    error PostIsLocked();
+    error PostNotLocked();
+    error PostAlreadyLocked();
+    error CommentAlreadyHidden();
     error EmptyUsername();
     error UsernameAlreadyTaken();
     error UsernameAlreadySet();
@@ -381,6 +392,28 @@ contract DecentralizedForum {
         uint256 createdAt
     );
 
+    event PostLocked(
+        uint256 indexed postId,
+        uint256 indexed communityId,
+        address lockedBy,
+        uint256 lockedAt
+    );
+
+    event PostUnlocked(
+        uint256 indexed postId,
+        uint256 indexed communityId,
+        address unlockedBy,
+        uint256 unlockedAt
+    );
+
+    event CommentHidden(
+        uint256 indexed commentId,
+        uint256 indexed postId,
+        uint256 indexed communityId,
+        address hiddenBy,
+        uint256 hiddenAt
+    );
+
     event CommentSubmittedForReview(
         uint256 indexed commentId,
         uint256 indexed postId,
@@ -548,13 +581,16 @@ contract DecentralizedForum {
         );
     }
 
-    // Any member can recommend a candidate; MODERATOR_RECOMMENDATIONS_REQUIRED
-    // distinct recommendations open an offer the candidate must accept before
-    // becoming a moderator. One vote per member per round.
+    // Only current moderators can recommend a candidate. The offer opens once
+    // min(MODERATOR_RECOMMENDATIONS_REQUIRED, moderator count) distinct
+    // moderators recommend, so small communities are not deadlocked. The
+    // candidate must accept before becoming a moderator. One vote per
+    // moderator per round; self-recommendation and recommending a sitting
+    // moderator are rejected.
     function recommendModerator(uint256 communityId, address candidate)
         external
         communityMustExist(communityId)
-        onlyCommunityMember(communityId)
+        onlyCommunityModerator(communityId)
         notBanned(communityId)
     {
         if (candidate == address(0)) {
@@ -598,7 +634,7 @@ contract DecentralizedForum {
             block.timestamp
         );
 
-        if (votes >= MODERATOR_RECOMMENDATIONS_REQUIRED) {
+        if (votes >= _recommendationsRequired(communityId)) {
             pendingModeratorOffers[communityId][candidate] = true;
 
             emit ModeratorOfferCreated(
@@ -607,6 +643,14 @@ contract DecentralizedForum {
                 block.timestamp
             );
         }
+    }
+
+    // min(MODERATOR_RECOMMENDATIONS_REQUIRED, current moderator count) - with
+    // fewer than 3 moderators the community would otherwise never be able to
+    // appoint anyone.
+    function _recommendationsRequired(uint256 communityId) private view returns (uint256) {
+        uint256 count = getModeratorCount(communityId);
+        return count < MODERATOR_RECOMMENDATIONS_REQUIRED ? count : MODERATOR_RECOMMENDATIONS_REQUIRED;
     }
 
     function acceptModeratorRole(uint256 communityId)
@@ -909,8 +953,13 @@ contract DecentralizedForum {
             revert OnlyCommunityMembersAllowed();
         }
 
+        if (postLocked[postId]) {
+            revert PostIsLocked();
+        }
+
         uint256 commentId = nextCommentId;
         nextCommentId++;
+        commentPostIds[commentId] = postId;
 
         emit CommentCreated(
             commentId,
@@ -941,6 +990,10 @@ contract DecentralizedForum {
 
         if (!isMember[communityId][msg.sender]) {
             revert OnlyCommunityMembersAllowed();
+        }
+
+        if (postLocked[postId]) {
+            revert PostIsLocked();
         }
 
         uint256 commentId = nextPendingCommentId;
@@ -1084,6 +1137,74 @@ contract DecentralizedForum {
         emit PostHidden(
             postId,
             posts[postId].communityId,
+            msg.sender,
+            block.timestamp
+        );
+    }
+
+    // Locking keeps the post visible but blocks any new comments on it.
+    function lockPost(uint256 postId)
+        external
+        postMustExist(postId)
+        onlyCommunityModerator(posts[postId].communityId)
+    {
+        if (postLocked[postId]) {
+            revert PostAlreadyLocked();
+        }
+
+        postLocked[postId] = true;
+
+        emit PostLocked(
+            postId,
+            posts[postId].communityId,
+            msg.sender,
+            block.timestamp
+        );
+    }
+
+    function unlockPost(uint256 postId)
+        external
+        postMustExist(postId)
+        onlyCommunityModerator(posts[postId].communityId)
+    {
+        if (!postLocked[postId]) {
+            revert PostNotLocked();
+        }
+
+        postLocked[postId] = false;
+
+        emit PostUnlocked(
+            postId,
+            posts[postId].communityId,
+            msg.sender,
+            block.timestamp
+        );
+    }
+
+    // Hides a regular on-chain comment. The stored commentId -> postId link
+    // proves which community the comment belongs to, so only that community's
+    // moderators can hide it.
+    function hideComment(uint256 commentId) external {
+        uint256 postId = commentPostIds[commentId];
+        if (postId == 0) {
+            revert CommentDoesNotExist();
+        }
+
+        uint256 communityId = posts[postId].communityId;
+        if (!_isModerator(communityId, msg.sender)) {
+            revert OnlyCommunityModeratorAllowed();
+        }
+
+        if (commentHidden[commentId]) {
+            revert CommentAlreadyHidden();
+        }
+
+        commentHidden[commentId] = true;
+
+        emit CommentHidden(
+            commentId,
+            postId,
+            communityId,
             msg.sender,
             block.timestamp
         );
@@ -1764,7 +1885,7 @@ contract DecentralizedForum {
     {
         return (
             recommendationCount[communityId][candidate],
-            MODERATOR_RECOMMENDATIONS_REQUIRED,
+            _recommendationsRequired(communityId),
             pendingModeratorOffers[communityId][candidate]
         );
     }

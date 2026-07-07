@@ -36,6 +36,11 @@
   },
   {
     "inputs": [],
+    "name": "CommentAlreadyHidden",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "CommentDoesNotExist",
     "type": "error"
   },
@@ -166,12 +171,27 @@
   },
   {
     "inputs": [],
+    "name": "PostAlreadyLocked",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "PostDoesNotExist",
     "type": "error"
   },
   {
     "inputs": [],
+    "name": "PostIsLocked",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "PostNotHidden",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "PostNotLocked",
     "type": "error"
   },
   {
@@ -302,6 +322,43 @@
       }
     ],
     "name": "CommentCreated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "commentId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "postId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "communityId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "hiddenBy",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "hiddenAt",
+        "type": "uint256"
+      }
+    ],
+    "name": "CommentHidden",
     "type": "event"
   },
   {
@@ -939,6 +996,37 @@
         "type": "uint256"
       },
       {
+        "indexed": false,
+        "internalType": "address",
+        "name": "lockedBy",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "lockedAt",
+        "type": "uint256"
+      }
+    ],
+    "name": "PostLocked",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "postId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "communityId",
+        "type": "uint256"
+      },
+      {
         "indexed": true,
         "internalType": "address",
         "name": "restoredBy",
@@ -989,6 +1077,37 @@
       }
     ],
     "name": "PostSubmittedForReview",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "postId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "communityId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "unlockedBy",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "unlockedAt",
+        "type": "uint256"
+      }
+    ],
+    "name": "PostUnlocked",
     "type": "event"
   },
   {
@@ -1539,6 +1658,25 @@
     "name": "changeUsername",
     "outputs": [],
     "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "commentHidden",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -2385,6 +2523,19 @@
     "inputs": [
       {
         "internalType": "uint256",
+        "name": "commentId",
+        "type": "uint256"
+      }
+    ],
+    "name": "hideComment",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
         "name": "postId",
         "type": "uint256"
       }
@@ -2600,6 +2751,38 @@
     "name": "leaveCommunity",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "postId",
+        "type": "uint256"
+      }
+    ],
+    "name": "lockPost",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "postLocked",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -2827,6 +3010,19 @@
       }
     ],
     "name": "unbanUser",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "postId",
+        "type": "uint256"
+      }
+    ],
+    "name": "unlockPost",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

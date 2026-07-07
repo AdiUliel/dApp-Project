@@ -1239,3 +1239,171 @@ textarea:focus {
     grid-template-columns: repeat(8, 1fr);
   }
 }
+
+/* Kebab (three-dot) moderator menus */
+.kebab-wrapper {
+  position: relative;
+  align-self: flex-start;
+  margin-inline-start: auto;
+}
+
+.kebab-button {
+  border: 1px solid transparent;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: #94a3b8;
+  width: 1.9rem;
+  height: 1.9rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kebab-button:hover {
+  border-color: rgba(148, 163, 184, 0.3);
+  background: rgba(255, 255, 255, 0.06);
+  color: #f8fafc;
+}
+
+.kebab-menu {
+  position: absolute;
+  top: 2.1rem;
+  inset-inline-end: 0;
+  z-index: 30;
+  min-width: 13rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0.3rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 0.8rem;
+  background: rgba(15, 23, 42, 0.97);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+}
+
+.kebab-menu button {
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: #e2e8f0;
+  text-align: start;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.kebab-menu button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.kebab-menu button.danger {
+  color: #fca5a5;
+}
+
+.kebab-menu button.danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.comment-item {
+  position: relative;
+}
+
+.comment-kebab {
+  position: absolute;
+  top: 0.35rem;
+  inset-inline-end: 0.35rem;
+}
+
+.locked-notice {
+  border: 1px dashed rgba(251, 146, 60, 0.4);
+  border-radius: 0.8rem;
+  padding: 0.7rem 0.9rem;
+  margin-top: 0.5rem;
+}
+
+/* Clickable notifications (click marks a single one as read) */
+.notification-item.clickable {
+  cursor: pointer;
+}
+
+.notification-item.clickable:hover {
+  border-color: rgba(251, 146, 60, 0.7);
+}
+
+/* Slicker create-community / sub-community modals */
+.modal-card {
+  border-radius: 1.1rem;
+}
+
+.modal-card h3 {
+  margin: 0;
+  letter-spacing: -0.03em;
+}
+
+.modal-card input,
+.modal-card textarea,
+.modal-card .composer textarea {
+  padding: 0.65rem 0.8rem;
+  font-size: 0.92rem;
+  border-radius: 0.7rem;
+}
+
+.modal-card textarea,
+.modal-card .composer textarea {
+  min-height: 4.2rem;
+}
+
+.modal-card .primary-button,
+.modal-card .ghost-button,
+.modal-card .secondary-button {
+  min-height: 2.3rem;
+  font-size: 0.9rem;
+}
+
+/* Post kebab: pinned to the card corner so it is visible collapsed or expanded */
+.post-card {
+  position: relative;
+}
+
+.post-kebab {
+  position: absolute;
+  top: 0.6rem;
+  inset-inline-end: 0.6rem;
+  z-index: 5;
+}
+
+.post-main-content {
+  padding-inline-end: 1.9rem;
+}
+
+/* Keep comment text clear of the comment kebab */
+.comment-item {
+  padding-inline-end: 2.4rem;
+}
+
+/* Optimistic (confirming) posts and comments: shown immediately, dimmed with a
+   subtle pulse until the chain confirms and the graph reconciles them. */
+.confirming-post,
+.confirming-comment {
+  opacity: 0.72;
+}
+
+.confirming-post {
+  border-inline-start: 2px solid rgba(251, 146, 60, 0.55);
+}
+
+@keyframes confirm-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.confirming-post .badge.info {
+  animation: confirm-pulse 1.4s ease-in-out infinite;
+}
+
+/* Static vote box for a not-yet-confirmed post (no clickable arrows) */
+.vote-box-static .vote-button-disabled {
+  padding: 0.15rem 0.6rem;
+  color: rgba(148, 163, 184, 0.45);
+  font-size: 0.95rem;
+  cursor: default;
+}
