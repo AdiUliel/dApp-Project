@@ -11,6 +11,7 @@ import {
   PostLocked,
   PostUnlocked,
   CommentHidden,
+  ContentReported,
   ModeratorAdded,
   ModeratorRemoved,
   ModeratorRecommended,
@@ -30,7 +31,7 @@ import {
   PendingCommentApproved,
   PendingCommentRejected,
 } from '../generated/DecentralizedForum/DecentralizedForum'
-import { User, Community, Post, Vote, Activity, Notification, Comment, PendingComment } from '../generated/schema'
+import { User, Community, Post, Vote, Activity, Notification, Comment, PendingComment, Report } from '../generated/schema'
 
 const EMPTY_ADDRESS = '0x0000000000000000000000000000000000000000'
 
@@ -83,7 +84,9 @@ function recordActivity(
     user.save()
   }
 
-  const activity = new Activity(eventId(event) + '-' + type)
+  // Address in the id so one event can record activity for several users
+  // (e.g. two users entering the active-moderator pair at once).
+  const activity = new Activity(eventId(event) + '-' + type + '-' + userAddress.toHexString())
   activity.user = user.id
   activity.type = type
   activity.refId = refId
@@ -345,6 +348,23 @@ export function handlePostUnlocked(event: PostUnlocked): void {
   recordActivity(event, event.params.unlockedBy, 'POST_UNLOCKED', event.params.postId, post.title)
 }
 
+export function handleContentReported(event: ContentReported): void {
+  const report = new Report(eventId(event))
+  report.kind = event.params.kind
+  report.refId = event.params.refId
+  report.community = event.params.communityId.toString()
+  report.reporter = getOrCreateUser(event.params.reporter).id
+  report.reason = event.params.reason
+  report.createdAt = event.params.reportedAt
+  report.save()
+
+  // Every moderator of the community gets told, so reports reach them on any machine.
+  const community = Community.load(event.params.communityId.toString())
+  if (community != null) {
+    notifyModerators(event, community, 'CONTENT_REPORTED', event.params.reporter, event.params.refId, event.params.reason)
+  }
+}
+
 export function handleCommentHidden(event: CommentHidden): void {
   const comment = Comment.load(event.params.commentId.toString())
   if (comment == null) {
@@ -388,9 +408,9 @@ export function handleModeratorAdded(event: ModeratorAdded): void {
 
   recordActivity(event, event.params.moderator, 'BECAME_MODERATOR', event.params.communityId, '')
 
-  if (!event.params.moderator.equals(event.params.addedBy)) {
-    notify(event, event.params.moderator, 'BECAME_MODERATOR', event.params.addedBy, event.params.communityId, '')
-  }
+  // Always notify the new moderator - even when they added themselves by
+  // accepting an offer, which is exactly when they want to hear about it.
+  notify(event, event.params.moderator, 'BECAME_MODERATOR', event.params.addedBy, event.params.communityId, '')
 }
 
 export function handleModeratorRemoved(event: ModeratorRemoved): void {
@@ -463,6 +483,42 @@ export function handleActiveModeratorsUpdated(event: ActiveModeratorsUpdated): v
 
   const first = event.params.firstActiveModerator.toHexString()
   const second = event.params.secondActiveModerator.toHexString()
+
+  const oldActive: string[] = []
+  const prev1 = community.activeModerator1
+  const prev2 = community.activeModerator2
+  if (prev1 !== null) oldActive.push(prev1)
+  if (prev2 !== null) oldActive.push(prev2)
+
+  const newActive: string[] = []
+  if (first != EMPTY_ADDRESS) newActive.push(first)
+  if (second != EMPTY_ADDRESS) newActive.push(second)
+
+  // Creator/appointed moderators are tracked separately and keep their status
+  // regardless of the active pair, so don't announce a gain/loss for them.
+  const appointed = community.moderators
+  const actor = event.transaction.from
+
+  // Auto-promoted into the active-moderator pair: same became-moderator signal
+  // as the appointed path, so it shows in notifications and recent activity.
+  for (let i = 0; i < newActive.length; i++) {
+    const addr = newActive[i]
+    if (!oldActive.includes(addr) && !appointed.includes(addr)) {
+      const a = Address.fromString(addr)
+      recordActivity(event, a, 'BECAME_MODERATOR', event.params.communityId, '')
+      notify(event, a, 'BECAME_MODERATOR', actor, event.params.communityId, '')
+    }
+  }
+
+  // Dropped out of the active pair and not a moderator by any other role.
+  for (let i = 0; i < oldActive.length; i++) {
+    const addr = oldActive[i]
+    if (!newActive.includes(addr) && !appointed.includes(addr)) {
+      const a = Address.fromString(addr)
+      recordActivity(event, a, 'MODERATOR_REMOVED', event.params.communityId, '')
+      notify(event, a, 'MODERATOR_REMOVED', actor, event.params.communityId, '')
+    }
+  }
 
   community.activeModerator1 = first == EMPTY_ADDRESS ? null : first
   community.activeModerator2 = second == EMPTY_ADDRESS ? null : second

@@ -280,4 +280,46 @@ describe("DecentralizedForum moderation queue", function () {
         .to.be.revertedWithCustomError(forum, "CommentDoesNotExist");
     });
   });
+
+  describe("content reports", function () {
+    async function forumWithComment() {
+      const forum = await forumWithCommunity();
+      await forum.createPost(1n, "cid-post", "a post", "");
+      await forum.connect(user1).addComment(1n, "a comment", "");
+      return forum;
+    }
+
+    it("anyone can report a post, emitting ContentReported with kind 0", async function () {
+      const forum = await forumWithComment();
+
+      const tx = await forum.connect(user2).reportPost(1n, "spam");
+      const receipt = await tx.wait();
+      const event = receipt.logs
+        .map((log: any) => { try { return forum.interface.parseLog(log); } catch { return null; } })
+        .find((parsed: any) => parsed && parsed.name === "ContentReported");
+
+      expect(event, "ContentReported not emitted").to.not.equal(undefined);
+      expect(event.args[0]).to.equal(1n); // refId (postId)
+      expect(event.args[1]).to.equal(1n); // communityId
+      expect(event.args[2]).to.equal(0n); // kind = post
+      expect(event.args[3]).to.equal(user2.address); // reporter
+      expect(event.args[4]).to.equal("spam"); // reason
+    });
+
+    it("reports a comment with kind 1, and rejects unknown comment ids", async function () {
+      const forum = await forumWithComment();
+
+      await expect(forum.connect(user2).reportComment(1n, "offensive"))
+        .to.emit(forum, "ContentReported");
+
+      await expect(forum.reportComment(99n, "x"))
+        .to.be.revertedWithCustomError(forum, "CommentDoesNotExist");
+    });
+
+    it("rejects reporting a non-existent post", async function () {
+      const forum = await forumWithComment();
+      await expect(forum.reportPost(99n, "x"))
+        .to.be.revertedWithCustomError(forum, "PostDoesNotExist");
+    });
+  });
 });

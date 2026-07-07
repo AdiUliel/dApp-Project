@@ -12,6 +12,7 @@ import {
   fetchApprovedComments,
   fetchComments,
   fetchPendingComments,
+  fetchReports,
   fetchRecentPosts,
   setGraphEndpoint,
   waitForGraphBlock,
@@ -25,12 +26,14 @@ import {
   searchUsers,
   type GraphActivity,
   type GraphPost,
+  type GraphReport,
   type GraphUser,
 } from './graph'
 import './App.css'
 
 const COMMENTS_STORAGE_KEY = 'reppit_signed_comments_v1'
 const READ_NOTIFICATIONS_KEY = 'reppit_read_notifications_v1'
+const HIDDEN_POSTS_KEY = 'reppit_hidden_posts_v1'
 const USERNAME_CHANGE_FEE_ETH = '0.05'
 
 type View = 'home' | 'community' | 'profile' | 'search'
@@ -47,6 +50,8 @@ type Community = {
   parentCommunityId: string
   moderatorRole?: ModeratorRole
   hasModeratorOffer: boolean
+  // Optimistic placeholder shown while creation confirms on-chain.
+  confirming?: boolean
 }
 
 type ModeratorRole = {
@@ -305,6 +310,17 @@ function App() {
   const [showNotificationsPanel, setShowNotificationsPanel] = useState(false)
   // Which kebab (three-dot moderator menu) is open: `post-<id>` or `comment-<id>`.
   const [openKebabId, setOpenKebabId] = useState<string | null>(null)
+  // Content reports for the current community (shown to its moderators).
+  const [reports, setReports] = useState<GraphReport[]>([])
+  // Open report dialog target: { kind: 0 post | 1 comment, id }.
+  const [reportTarget, setReportTarget] = useState<{ kind: 0 | 1; id: string } | null>(null)
+  const [reportReason, setReportReason] = useState('')
+  // Posts this user chose to hide from their own feed (personal, client-side).
+  const [hiddenForMe, setHiddenForMe] = useState<string[]>([])
+  const [showHiddenForMe, setShowHiddenForMe] = useState(false)
+  // Feed pagination.
+  const [postsPerPage, setPostsPerPage] = useState(10)
+  const [feedPage, setFeedPage] = useState(1)
 
   // Deployment fingerprint (genesis block hash) that scopes localStorage keys,
   // so off-chain comments and read-notification marks from an older chain
@@ -319,25 +335,59 @@ function App() {
   const selectedCommunity = communities.find((community) => community.id === selectedCommunityId)
 
   const communitiesByParent = useMemo(() => {
-    return communities.reduce<Record<string, Community[]>>((acc, community) => {
+    const grouped = communities.reduce<Record<string, Community[]>>((acc, community) => {
       const parentId = community.parentCommunityId || '0'
       acc[parentId] = acc[parentId] || []
       acc[parentId].push(community)
       return acc
     }, {})
+    // Alphabetical by name so the home community list has a stable, scannable order.
+    for (const parentId of Object.keys(grouped)) {
+      grouped[parentId].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    }
+    return grouped
   }, [communities])
 
   const rootCommunities = communitiesByParent['0'] || []
 
   const myAddress = walletAddress.toLowerCase()
 
-  const visiblePosts = useMemo(() => {
+  // Posts visible in this community by moderation/authorship rules, before the
+  // personal "hide for me" filter.
+  const moderationVisiblePosts = useMemo(() => {
     return posts.filter((post) => {
       if (selectedCommunity?.isModerator) return true
       if (post.author.toLowerCase() === myAddress) return true
       return !post.hidden && !post.pending && !post.rejected
     })
   }, [posts, selectedCommunity?.isModerator, myAddress])
+
+  const hiddenForMeCount = useMemo(
+    () => moderationVisiblePosts.filter((post) => hiddenForMe.includes(post.id)).length,
+    [moderationVisiblePosts, hiddenForMe],
+  )
+
+  // Personal hide-for-me applied on top (unless the user is peeking at hidden ones).
+  const visiblePosts = useMemo(() => {
+    if (showHiddenForMe) return moderationVisiblePosts
+    return moderationVisiblePosts.filter((post) => !hiddenForMe.includes(post.id))
+  }, [moderationVisiblePosts, hiddenForMe, showHiddenForMe])
+
+  const pageCount = Math.max(1, Math.ceil(visiblePosts.length / postsPerPage))
+  const pagedPosts = useMemo(() => {
+    const start = (feedPage - 1) * postsPerPage
+    return visiblePosts.slice(start, start + postsPerPage)
+  }, [visiblePosts, feedPage, postsPerPage])
+
+  // Keep the current page in range when the list shrinks or the page size changes.
+  useEffect(() => {
+    if (feedPage > pageCount) setFeedPage(pageCount)
+  }, [feedPage, pageCount])
+
+  // Reset to the first page when switching communities or resizing the page.
+  useEffect(() => {
+    setFeedPage(1)
+  }, [selectedCommunityId, postsPerPage])
 
   const pendingPosts = useMemo(() => posts.filter((post) => post.pending), [posts])
 
@@ -397,6 +447,13 @@ function App() {
     loadLocalComments()
     setReadNotificationIds(loadReadNotificationIds())
   }, [storageScope])
+
+  // Personal hide-for-me list is scoped by both deployment and account.
+  useEffect(() => {
+    loadHiddenForMe()
+    setShowHiddenForMe(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageScope, walletAddress])
 
   useEffect(() => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, lang)
@@ -879,65 +936,66 @@ function App() {
     try {
       const contract = await getContract(false)
       const ids = await contract.getAllCommunityIds()
-      const loadedCommunities: Community[] = []
-
-      for (const id of ids) {
-        let community
-        let parentCommunityId = '0'
-
-        try {
-          community = await contract.getCommunityV2(id)
-          parentCommunityId = community[7].toString()
-        } catch {
-          community = await contract.getCommunity(id)
-        }
-
-        const communityId = community[0].toString()
-
-        let isMember = false
-        let isModerator = false
-        let isBanned = false
-        let hasModeratorOffer = false
-        let moderatorRole: ModeratorRole | undefined
-
-        if (account) {
-          isMember = await contract.isUserMemberOfCommunity(communityId, account)
-          isModerator = await contract.isUserModeratorOfCommunity(communityId, account)
-          isBanned = await contract.isUserBannedFromCommunity(communityId, account)
+      // Load every community in parallel, and within each fire the per-account
+      // reads together, so a forum with many communities isn't gated on a long
+      // chain of sequential round-trips (the dominant read latency on Sepolia).
+      const loadedCommunities: Community[] = await Promise.all(
+        ids.map(async (id: bigint): Promise<Community> => {
+          let community
+          let parentCommunityId = '0'
 
           try {
-            hasModeratorOffer = await contract.hasPendingModeratorOffer(communityId, account)
+            community = await contract.getCommunityV2(id)
+            parentCommunityId = community[7].toString()
           } catch {
-            hasModeratorOffer = false
+            community = await contract.getCommunity(id)
           }
 
-          try {
-            const role = await contract.getModeratorRole(communityId, account)
-            moderatorRole = {
-              isModerator: role[0],
-              isCreatorModerator: role[1],
-              isActiveBasedModerator: role[2],
-              isAppointedModerator: role[3],
-            }
-          } catch {
-            moderatorRole = { isModerator, isCreatorModerator: false, isActiveBasedModerator: false, isAppointedModerator: false }
-          }
-        }
+          const communityId = community[0].toString()
 
-        loadedCommunities.push({
-          id: communityId,
-          name: community[1],
-          creator: community[2],
-          metadataCID: community[3],
-          membersCount: community[5].toString(),
-          isMember,
-          isModerator,
-          isBanned,
-          parentCommunityId,
-          moderatorRole,
-          hasModeratorOffer,
-        })
-      }
+          let isMember = false
+          let isModerator = false
+          let isBanned = false
+          let hasModeratorOffer = false
+          let moderatorRole: ModeratorRole | undefined
+
+          if (account) {
+            const [memberRes, modRes, banRes, offerRes, roleRes] = await Promise.all([
+              contract.isUserMemberOfCommunity(communityId, account),
+              contract.isUserModeratorOfCommunity(communityId, account),
+              contract.isUserBannedFromCommunity(communityId, account),
+              contract.hasPendingModeratorOffer(communityId, account).catch(() => false),
+              contract.getModeratorRole(communityId, account).catch(() => null),
+            ])
+            isMember = memberRes
+            isModerator = modRes
+            isBanned = banRes
+            hasModeratorOffer = offerRes
+            moderatorRole = roleRes
+              ? {
+                  isModerator: roleRes[0],
+                  isCreatorModerator: roleRes[1],
+                  isActiveBasedModerator: roleRes[2],
+                  isAppointedModerator: roleRes[3],
+                }
+              : { isModerator, isCreatorModerator: false, isActiveBasedModerator: false, isAppointedModerator: false }
+          }
+
+          return {
+            id: communityId,
+            name: community[1],
+            creator: community[2],
+            metadataCID: community[3],
+            membersCount: community[5].toString(),
+            isMember,
+            isModerator,
+            isBanned,
+            parentCommunityId,
+            moderatorRole,
+            hasModeratorOffer,
+          }
+        }),
+      )
 
       setCommunities(loadedCommunities)
 
@@ -1004,16 +1062,20 @@ function App() {
   const loadVotesFor = async (postIds: string[], account = walletAddress) => {
     try {
       const contract = await getContract(false)
+
+      // Fetch every post's score/vote concurrently instead of one-at-a-time.
+      const results = await Promise.all(
+        postIds.map(async (postId) => {
+          const [score, myVote] = await Promise.all([
+            contract.postScore(postId),
+            account ? contract.postVotes(postId, account) : Promise.resolve(0),
+          ])
+          return [postId, { score: Number(score), myVote: Number(myVote) }] as const
+        }),
+      )
+
       const entries: Record<string, VoteInfo> = {}
-
-      for (const postId of postIds) {
-        const [score, myVote] = await Promise.all([
-          contract.postScore(postId),
-          account ? contract.postVotes(postId, account) : Promise.resolve(0),
-        ])
-        entries[postId] = { score: Number(score), myVote: Number(myVote) }
-      }
-
+      for (const [postId, info] of results) entries[postId] = info
       setVotesByPost((prev) => ({ ...prev, ...entries }))
     } catch (error) {
       console.error('Failed to load votes:', error)
@@ -1024,36 +1086,72 @@ function App() {
     try {
       const contract = await getContract(false)
       const postIds = await contract.getPostsByCommunity(communityId)
-      const loadedPosts: Post[] = []
 
-      for (const id of postIds) {
-        const post = await contract.getPost(id)
-        const [pending, rejected, locked] = await Promise.all([
-          contract.postPendingReview(id),
-          contract.postRejected(id),
-          // Older deployments predate postLocked; treat a failed call as unlocked.
-          contract.postLocked(id).catch(() => false),
-        ])
+      // Load every post and its status flags in parallel. Previously each post
+      // waited for the one before it, so N posts meant N serial round-trips;
+      // now it's a single concurrent batch.
+      const loadedPosts: Post[] = await Promise.all(
+        postIds.map(async (id: bigint): Promise<Post> => {
+          const [post, pending, rejected, locked] = await Promise.all([
+            contract.getPost(id),
+            contract.postPendingReview(id),
+            contract.postRejected(id),
+            // Older deployments predate postLocked; treat a failed call as unlocked.
+            contract.postLocked(id).catch(() => false),
+          ])
 
-        loadedPosts.push({
-          id: post[0].toString(),
-          communityId: post[1].toString(),
-          author: post[2],
-          contentCID: post[3],
-          createdAt: post[4].toString(),
-          hidden: post[6],
-          locked: Boolean(locked),
-          pending,
-          rejected,
-        })
-      }
+          return {
+            id: post[0].toString(),
+            communityId: post[1].toString(),
+            author: post[2],
+            contentCID: post[3],
+            createdAt: post[4].toString(),
+            hidden: post[6],
+            locked: Boolean(locked),
+            pending,
+            rejected,
+          }
+        }),
+      )
 
       setPosts(loadedPosts.reverse())
       loadVotesFor(loadedPosts.map((post) => post.id))
       loadOnChainComments(communityId, loadedPosts)
+      loadReports(communityId)
     } catch (error) {
       console.error('Failed to load posts:', error)
       setPosts([])
+    }
+  }
+
+  const loadReports = async (communityId: string) => {
+    const graphReports = await fetchReports(communityId)
+    setReports(graphReports || [])
+  }
+
+  // Anyone can report a post/comment; it goes on-chain so every moderator sees it.
+  const submitReport = async () => {
+    if (!reportTarget) return
+    const target = reportTarget
+    const reason = reportReason.trim() || 'No reason given'
+    setReportTarget(null)
+    setReportReason('')
+
+    try {
+      const contract = await getContract(true)
+      const tx =
+        target.kind === 0
+          ? await contract.reportPost(target.id, reason)
+          : await contract.reportComment(target.id.replace(/^c-/, ''), reason)
+
+      setTemporaryStatus(t('txSent'))
+      const receipt = await tx.wait()
+      await waitForGraphBlock(receipt.blockNumber)
+      await loadReports(selectedCommunityId)
+      setTemporaryStatus(t('reportSent'))
+    } catch (error) {
+      console.error('Report failed:', error)
+      failWith('reportFailed', error)
     }
   }
 
@@ -1312,6 +1410,42 @@ function App() {
     setReadNotificationIds(ids)
   }
 
+  // Per-account (and per-deployment) key for the personal hide-for-me list.
+  const hiddenPostsKey = () => {
+    const base = scopedStorageKey(HIDDEN_POSTS_KEY)
+    return base && walletAddress ? `${base}_${walletAddress.toLowerCase()}` : ''
+  }
+
+  const loadHiddenForMe = () => {
+    const key = hiddenPostsKey()
+    if (!key) {
+      setHiddenForMe([])
+      return
+    }
+    try {
+      setHiddenForMe(JSON.parse(localStorage.getItem(key) || '[]'))
+    } catch {
+      setHiddenForMe([])
+    }
+  }
+
+  const persistHiddenForMe = (ids: string[]) => {
+    const key = hiddenPostsKey()
+    if (key) localStorage.setItem(key, JSON.stringify(ids))
+    setHiddenForMe(ids)
+  }
+
+  const hidePostForMe = (postId: string) => {
+    if (hiddenForMe.includes(postId)) return
+    persistHiddenForMe([...hiddenForMe, postId])
+    if (selectedPostId === postId) setSelectedPostId('')
+    setTemporaryStatus(t('postHiddenForYou'))
+  }
+
+  const unhidePostForMe = (postId: string) => {
+    persistHiddenForMe(hiddenForMe.filter((id) => id !== postId))
+  }
+
   // Clicking a single notification marks just that one as read.
   const markNotificationRead = (id: string) => {
     if (readNotificationIds.includes(id)) return
@@ -1402,17 +1536,55 @@ function App() {
       const communityName = newCommunityName.trim()
       const tx = await contract.createCommunity(communityName, metadataCID, description)
 
-      setTemporaryStatus(t('creatingCommunity'))
-      await tx.wait()
-
+      const account = walletAddress
+      addOptimisticCommunity(communityName, metadataCID, '0', account)
       setNewCommunityName('')
       setNewCommunityDesc('')
       setShowCreateCommunityModal(false)
-      const account = await getCurrentWalletAddress()
-      await loadCommunities(account)
-      setTemporaryStatus(t('communityCreated', { name: communityName }))
+      setTemporaryStatus(t('communityConfirming'))
+
+      void reconcileCommunityCreate(tx, account, t('communityCreated', { name: communityName }))
     } catch (error) {
       console.error('Community creation failed:', error)
+      failWith('createCommunityFailed', error)
+    }
+  }
+
+  // Inserts a temporary community into the list so it shows the instant the tx
+  // is submitted; its description is already in ipfsCache from publishToIpfs.
+  const addOptimisticCommunity = (name: string, metadataCID: string, parentCommunityId: string, account: string) => {
+    setCommunities((prev) => [
+      ...prev,
+      {
+        id: `pending-${Date.now()}`,
+        name,
+        creator: account,
+        metadataCID,
+        membersCount: '1',
+        isMember: true,
+        isModerator: true,
+        isBanned: false,
+        parentCommunityId,
+        moderatorRole: { isModerator: true, isCreatorModerator: true, isActiveBasedModerator: false, isAppointedModerator: false },
+        hasModeratorOffer: false,
+        confirming: true,
+      },
+    ])
+  }
+
+  const reconcileCommunityCreate = async (
+    tx: ethers.ContractTransactionResponse,
+    account: string,
+    successMessage: string,
+  ) => {
+    try {
+      const receipt = await tx.wait()
+      if (receipt) await waitForGraphBlock(receipt.blockNumber)
+      await loadCommunities(account)
+      setTemporaryStatus(successMessage)
+    } catch (error) {
+      console.error('Community creation reconciliation failed:', error)
+      await loadCommunities(account).catch(() => {})
       failWith('createCommunityFailed', error)
     }
   }
@@ -1437,17 +1609,17 @@ function App() {
 
       const contract = await getContract(true)
       const subName = newSubCommunityName.trim()
-      const tx = await contract.createSubCommunity(selectedCommunityId, subName, metadataCID, description)
+      const parentId = selectedCommunityId
+      const tx = await contract.createSubCommunity(parentId, subName, metadataCID, description)
 
-      setTemporaryStatus(t('creatingSub'))
-      await tx.wait()
-
+      const account = walletAddress
+      addOptimisticCommunity(subName, metadataCID, parentId, account)
       setNewSubCommunityName('')
       setNewSubCommunityDesc('')
       setShowCreateSubCommunityModal(false)
-      const account = await getCurrentWalletAddress()
-      await loadCommunities(account)
-      setTemporaryStatus(t('subCreated', { name: subName }))
+      setTemporaryStatus(t('communityConfirming'))
+
+      void reconcileCommunityCreate(tx, account, t('subCreated', { name: subName }))
     } catch (error) {
       console.error('Sub-community creation failed:', error)
       failWith('subFailed', error)
@@ -2126,6 +2298,8 @@ function App() {
   }
 
   const openCommunity = (communityId: string) => {
+    // A community that is still confirming on-chain has no real id to query yet.
+    if (isTempId(communityId)) return
     // Re-clicking the current community won't re-fire the load effect (state
     // unchanged), so refresh explicitly - it doubles as a manual refresh.
     if (communityId === selectedCommunityId) {
@@ -2139,6 +2313,53 @@ function App() {
   const openProfile = (address: string) => {
     setProfileAddress(address)
     setView('profile')
+  }
+
+  // Feed pagination bar: page-size chooser (top only), first/prev, a window of
+  // page numbers, next/last, and a "page X of Y" readout - above and below the list.
+  const renderPagination = (position: 'top' | 'bottom') => {
+    if (visiblePosts.length === 0) return null
+
+    const windowSize = 2
+    const start = Math.max(1, feedPage - windowSize)
+    const end = Math.min(pageCount, feedPage + windowSize)
+    const pages: number[] = []
+    for (let p = start; p <= end; p++) pages.push(p)
+
+    return (
+      <div className={`pagination ${position}`}>
+        {position === 'top' && (
+          <div className="page-size">
+            <span>{t('postsPerPage')}</span>
+            {[5, 10, 15, 20].map((size) => (
+              <button
+                key={size}
+                className={`chip ${postsPerPage === size ? 'active' : ''}`}
+                onClick={() => setPostsPerPage(size)}
+              >
+                {size}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="page-nav">
+          <button className="page-btn" disabled={feedPage === 1} onClick={() => setFeedPage(1)} aria-label={t('firstPage')}>«</button>
+          <button className="page-btn" disabled={feedPage === 1} onClick={() => setFeedPage(feedPage - 1)} aria-label={t('prevPage')}>‹</button>
+          {start > 1 && <button className="page-btn" onClick={() => setFeedPage(1)}>1</button>}
+          {start > 2 && <span className="page-ellipsis">…</span>}
+          {pages.map((p) => (
+            <button key={p} className={`page-btn ${p === feedPage ? 'active' : ''}`} onClick={() => setFeedPage(p)}>
+              {p}
+            </button>
+          ))}
+          {end < pageCount - 1 && <span className="page-ellipsis">…</span>}
+          {end < pageCount && <button className="page-btn" onClick={() => setFeedPage(pageCount)}>{pageCount}</button>}
+          <button className="page-btn" disabled={feedPage === pageCount} onClick={() => setFeedPage(feedPage + 1)} aria-label={t('nextPage')}>›</button>
+          <button className="page-btn" disabled={feedPage === pageCount} onClick={() => setFeedPage(pageCount)} aria-label={t('lastPage')}>»</button>
+        </div>
+        <div className="page-info">{t('pageOf', { page: feedPage, total: pageCount })}</div>
+      </div>
+    )
   }
 
   const usernamePolicyError = usernameInput.trim() ? validateUsername(usernameInput.trim()) : null
@@ -2204,16 +2425,19 @@ function App() {
     return (
       <div key={community.id}>
         <button
-          className={`community-item ${view === 'community' && selectedCommunityId === community.id ? 'active' : ''}`}
+          className={`community-item ${view === 'community' && selectedCommunityId === community.id ? 'active' : ''} ${community.confirming ? 'confirming-community' : ''}`}
           style={{ paddingInlineStart: `${0.75 + depth * 1.1}rem` }}
           onClick={() => openCommunity(community.id)}
         >
           <span className="community-avatar">{depth > 0 ? '↳' : 'r/'}</span>
           <span className="community-main">
             <strong>r/{community.name}</strong>
-            <small>{t('membersLabel', { count: community.membersCount })}</small>
+            <small>
+              {community.confirming ? t('confirmingBadge') : t('membersLabel', { count: community.membersCount })}
+            </small>
           </span>
-          {community.isModerator && <span className="mini-badge mod">MOD</span>}
+          {community.confirming && <span className="mini-badge">⏳</span>}
+          {!community.confirming && community.isModerator && <span className="mini-badge mod">MOD</span>}
         </button>
 
         {children.map((child) => renderCommunityButton(child, depth + 1))}
@@ -2280,7 +2504,7 @@ function App() {
 
   const renderPendingReviewPanel = () => {
     if (!selectedCommunity?.isModerator) return null
-    if (pendingPosts.length === 0 && pendingComments.length === 0) return null
+    if (pendingPosts.length === 0 && pendingComments.length === 0 && reports.length === 0) return null
 
     return (
       <section className="panel secondary-create-card review-panel">
@@ -2337,6 +2561,23 @@ function App() {
                   <button className="danger-button" onClick={() => decidePendingComment(comment.id, false)}>
                     {t('reject')}
                   </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {reports.length > 0 && (
+          <div className="review-group">
+            <h3>{t('reportsTitle')}</h3>
+            {reports.map((report) => (
+              <div className="review-item" key={`report-${report.id}`}>
+                <div className="review-item-body">
+                  <strong>{report.kind === 0 ? t('reportOnPost', { id: report.refId }) : t('reportOnComment', { id: report.refId })}</strong>
+                  <p className="rich-text">"{report.reason}"</p>
+                  <small>
+                    {t('reportedBy')} {report.reporter.username ? `@${report.reporter.username}` : formatUser(report.reporter.id)} · {formatDate(report.createdAt)}
+                  </small>
                 </div>
               </div>
             ))}
@@ -2469,13 +2710,21 @@ function App() {
             <span>{t('postsCount', { count: visiblePosts.length })}</span>
           </div>
 
+          {hiddenForMeCount > 0 && (
+            <button className="ghost-button hidden-toggle" onClick={() => setShowHiddenForMe((previous) => !previous)}>
+              {showHiddenForMe ? t('hideHiddenPosts') : t('showHiddenPosts', { count: hiddenForMeCount })}
+            </button>
+          )}
+
           {visiblePosts.length === 0 ? (
             <div className="empty-state panel">
               <h3>{t('noPostsYet')}</h3>
               <p>{t('noPostsBody')}</p>
             </div>
           ) : (
-            visiblePosts.map((post) => {
+            <>
+              {renderPagination('top')}
+              {pagedPosts.map((post) => {
               const metadata = getPostMetadata(post)
               const postComments = commentsForPost(post.id)
               const chainComments = onChainCommentsForPost(post.id)
@@ -2524,12 +2773,12 @@ function App() {
                       </div>
                     </button>
 
-                    {selectedCommunity.isModerator && !post.pending && !post.rejected && !post.confirming && (
+                    {!post.confirming && (
                       <div className="kebab-wrapper post-kebab">
                         <button
                           className="kebab-button"
-                          aria-label={t('modActionsMenu')}
-                          title={t('modActionsMenu')}
+                          aria-label={t('postActionsMenu')}
+                          title={t('postActionsMenu')}
                           onClick={(event) => {
                             event.stopPropagation()
                             setOpenKebabId(openKebabId === `post-${post.id}` ? null : `post-${post.id}`)
@@ -2539,23 +2788,39 @@ function App() {
                         </button>
                         {openKebabId === `post-${post.id}` && (
                           <div className="kebab-menu">
-                            {post.hidden ? (
-                              <button onClick={() => { setOpenKebabId(null); restorePost(post.id) }}>
-                                {t('restorePost')}
+                            {hiddenForMe.includes(post.id) ? (
+                              <button onClick={() => { setOpenKebabId(null); unhidePostForMe(post.id) }}>
+                                {t('unhideForMe')}
                               </button>
                             ) : (
-                              <button className="danger" onClick={() => { setOpenKebabId(null); hidePost(post.id) }}>
-                                {t('hidePostButton')}
+                              <button onClick={() => { setOpenKebabId(null); hidePostForMe(post.id) }}>
+                                {t('hideForMe')}
                               </button>
                             )}
-                            {post.locked ? (
-                              <button onClick={() => { setOpenKebabId(null); setPostLock(post.id, false) }}>
-                                {t('unlockPostAction')}
-                              </button>
-                            ) : (
-                              <button onClick={() => { setOpenKebabId(null); setPostLock(post.id, true) }}>
-                                {t('lockPostAction')}
-                              </button>
+                            <button onClick={() => { setOpenKebabId(null); setReportReason(''); setReportTarget({ kind: 0, id: post.id }) }}>
+                              {t('reportAction')}
+                            </button>
+                            {selectedCommunity.isModerator && !post.pending && !post.rejected && (
+                              <>
+                                {post.hidden ? (
+                                  <button onClick={() => { setOpenKebabId(null); restorePost(post.id) }}>
+                                    {t('restorePost')}
+                                  </button>
+                                ) : (
+                                  <button className="danger" onClick={() => { setOpenKebabId(null); hidePost(post.id) }}>
+                                    {t('hidePostButton')}
+                                  </button>
+                                )}
+                                {post.locked ? (
+                                  <button onClick={() => { setOpenKebabId(null); setPostLock(post.id, false) }}>
+                                    {t('unlockPostAction')}
+                                  </button>
+                                ) : (
+                                  <button onClick={() => { setOpenKebabId(null); setPostLock(post.id, true) }}>
+                                    {t('lockPostAction')}
+                                  </button>
+                                )}
+                              </>
                             )}
                           </div>
                         )}
@@ -2571,12 +2836,12 @@ function App() {
                           <div className="comments-list">
                             {chainComments.map((comment) => (
                               <div className={`comment-item ${comment.confirming ? 'confirming-comment' : ''}`} key={`chain-${comment.id}`}>
-                                {selectedCommunity.isModerator && comment.id.startsWith('c-') && (
+                                {comment.id.startsWith('c-') && (
                                   <div className="kebab-wrapper comment-kebab">
                                     <button
                                       className="kebab-button"
-                                      aria-label={t('modActionsMenu')}
-                                      title={t('modActionsMenu')}
+                                      aria-label={t('postActionsMenu')}
+                                      title={t('postActionsMenu')}
                                       onClick={(event) => {
                                         event.stopPropagation()
                                         setOpenKebabId(
@@ -2588,12 +2853,17 @@ function App() {
                                     </button>
                                     {openKebabId === `comment-${comment.id}` && (
                                       <div className="kebab-menu">
-                                        <button
-                                          className="danger"
-                                          onClick={() => { setOpenKebabId(null); hideChainComment(comment.id) }}
-                                        >
-                                          {t('hideCommentAction')}
+                                        <button onClick={() => { setOpenKebabId(null); setReportReason(''); setReportTarget({ kind: 1, id: comment.id }) }}>
+                                          {t('reportAction')}
                                         </button>
+                                        {selectedCommunity.isModerator && (
+                                          <button
+                                            className="danger"
+                                            onClick={() => { setOpenKebabId(null); hideChainComment(comment.id) }}
+                                          >
+                                            {t('hideCommentAction')}
+                                          </button>
+                                        )}
                                       </div>
                                     )}
                                   </div>
@@ -2671,7 +2941,9 @@ function App() {
                   </div>
                 </article>
               )
-            })
+              })}
+              {renderPagination('bottom')}
+            </>
           )}
         </section>
       </>
@@ -3246,6 +3518,20 @@ function App() {
                 onClick={submitUsernameChange}
               >
                 {t('payAndChange', { fee: USERNAME_CHANGE_FEE_ETH })}
+              </button>
+            </Modal>
+          )}
+
+          {reportTarget && (
+            <Modal title={t('reportTitle')} onClose={() => setReportTarget(null)}>
+              <p className="muted-text">{t('reportBody')}</p>
+              <textarea
+                placeholder={t('reportReasonPh')}
+                value={reportReason}
+                onChange={(event) => setReportReason(event.target.value)}
+              />
+              <button className="danger-button full" onClick={submitReport}>
+                {t('reportSubmit')}
               </button>
             </Modal>
           )}

@@ -101,26 +101,44 @@ const POST_FIELDS = `
   author { id username }
 `
 
+// The @fulltext search is backed by Postgres to_tsquery, which needs boolean
+// operators between terms - a raw "word1 word2" is a syntax error, not a search.
+// Turn the user's plain text into a valid tsquery: keep only word characters
+// (Unicode-aware, so Hebrew works), match each as a prefix (:*) so partial words
+// still hit, and AND them together so every term must appear. Returns '' when
+// there is nothing searchable, letting callers skip the query.
+function toFulltextQuery(term: string): string {
+  const tokens = term.match(/[\p{L}\p{N}_]+/gu)
+  if (!tokens || tokens.length === 0) return ''
+  return tokens.map((token) => `${token}:*`).join(' & ')
+}
+
 export async function searchPosts(term: string): Promise<GraphPost[] | null> {
+  const text = toFulltextQuery(term)
+  if (!text) return []
   const data = await graphQuery<{ postSearch: GraphPost[] }>(
     `query ($text: String!) { postSearch(text: $text, first: 25) { ${POST_FIELDS} } }`,
-    { text: term }
+    { text }
   )
   return data ? data.postSearch : null
 }
 
 export async function searchCommunities(term: string): Promise<GraphCommunity[] | null> {
+  const text = toFulltextQuery(term)
+  if (!text) return []
   const data = await graphQuery<{ communitySearch: GraphCommunity[] }>(
     `query ($text: String!) { communitySearch(text: $text, first: 25) { id name description membersCount createdAt } }`,
-    { text: term }
+    { text }
   )
   return data ? data.communitySearch : null
 }
 
 export async function searchUsers(term: string): Promise<GraphUser[] | null> {
+  const text = toFulltextQuery(term)
+  if (!text) return []
   const data = await graphQuery<{ userSearch: GraphUser[] }>(
     `query ($text: String!) { userSearch(text: $text, first: 25) { id username postCount communitiesJoined totalGasUsed totalFeesWei registeredAt } }`,
-    { text: term }
+    { text }
   )
   return data ? data.userSearch : null
 }
@@ -197,6 +215,24 @@ export async function fetchComments(communityId: string): Promise<GraphComment[]
     { community: communityId }
   )
   return data ? data.comments : null
+}
+
+export type GraphReport = {
+  id: string
+  kind: number
+  refId: string
+  reason: string
+  createdAt: string
+  reporter: { id: string; username: string | null }
+}
+
+// User reports of content in a community, newest first, for the moderator panel.
+export async function fetchReports(communityId: string): Promise<GraphReport[] | null> {
+  const data = await graphQuery<{ reports: GraphReport[] }>(
+    `query ($community: String!) { reports(where: { community: $community }, orderBy: createdAt, orderDirection: desc, first: 100) { id kind refId reason createdAt reporter { id username } } }`,
+    { community: communityId }
+  )
+  return data ? data.reports : null
 }
 
 export async function fetchUserProfile(address: string): Promise<GraphUser | null> {

@@ -75,6 +75,16 @@ type Vote @entity(immutable: false) {
   updatedAt: BigInt!
 }
 
+type Report @entity(immutable: true) {
+  id: ID! # txHash-logIndex
+  kind: Int! # 0 = post, 1 = comment
+  refId: BigInt! # postId or commentId
+  community: Community!
+  reporter: User!
+  reason: String!
+  createdAt: BigInt!
+}
+
 enum ActivityType {
   COMMUNITY_CREATED
   SUBCOMMUNITY_CREATED
@@ -131,6 +141,7 @@ enum NotificationType {
   COMMENT_REPLY
   POST_LOCKED
   COMMENT_HIDDEN
+  CONTENT_REPORTED
 }
 
 type Notification @entity(immutable: true) {

@@ -59,6 +59,9 @@ dataSources:
         - event: CommentHidden(indexed uint256,indexed uint256,indexed uint256,address,uint256)
           handler: handleCommentHidden
           receipt: true
+        - event: ContentReported(indexed uint256,indexed uint256,uint8,address,string,uint256)
+          handler: handleContentReported
+          receipt: true
         - event: ModeratorAdded(indexed uint256,indexed address,indexed address,uint256)
           handler: handleModeratorAdded
           receipt: true

@@ -414,6 +414,18 @@ contract DecentralizedForum {
         uint256 hiddenAt
     );
 
+    // User report of content that the automatic filters did not catch.
+    // kind 0 = post, 1 = comment. Event-only: nothing stored on-chain, the
+    // subgraph indexes it and fans it out to the community's moderators.
+    event ContentReported(
+        uint256 indexed refId,
+        uint256 indexed communityId,
+        uint8 kind,
+        address reporter,
+        string reason,
+        uint256 reportedAt
+    );
+
     event CommentSubmittedForReview(
         uint256 indexed commentId,
         uint256 indexed postId,
@@ -1208,6 +1220,24 @@ contract DecentralizedForum {
             msg.sender,
             block.timestamp
         );
+    }
+
+    // Anyone can report content the automatic filters missed. No protocol fee -
+    // just the tx gas - and fully on-chain, so every community moderator (on any
+    // machine) sees it. kind 0 = post, 1 = comment.
+    function reportPost(uint256 postId, string calldata reason)
+        external
+        postMustExist(postId)
+    {
+        emit ContentReported(postId, posts[postId].communityId, 0, msg.sender, reason, block.timestamp);
+    }
+
+    function reportComment(uint256 commentId, string calldata reason) external {
+        uint256 postId = commentPostIds[commentId];
+        if (postId == 0) {
+            revert CommentDoesNotExist();
+        }
+        emit ContentReported(commentId, posts[postId].communityId, 1, msg.sender, reason, block.timestamp);
     }
 
     function restorePost(uint256 postId)
