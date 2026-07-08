@@ -170,7 +170,7 @@ describe("DecentralizedForum", function () {
       await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
 
-      await forum.banUser(1n, user1.address);
+      await forum.banUser(1n, user1.address, "spam");
 
       expect(await forum.isUserBannedFromCommunity(1n, user1.address)).to.equal(true);
       expect(await forum.isUserMemberOfCommunity(1n, user1.address)).to.equal(false);
@@ -189,7 +189,7 @@ describe("DecentralizedForum", function () {
       await forum.createCommunity("Solidity", "cid-123", "a community");
 
       await expect(
-        forum.banUser(1n, owner.address)
+        forum.banUser(1n, owner.address, "x")
       ).to.be.revertedWithCustomError(forum, "CannotBanCommunityCreator");
     });
   });
@@ -247,28 +247,6 @@ describe("DecentralizedForum", function () {
       ).to.be.revertedWithCustomError(forum, "EmptyContentCID");
     });
 
-    it("should allow batch post creation", async function () {
-      const forum = await deployForum();
-
-      await forum.createCommunity("Solidity", "cid-123", "a community");
-      await forum.batchCreatePosts(1n, ["post-cid-1", "post-cid-2", "post-cid-3"], ["t1", "t2", "t3"], ["", "", ""]);
-
-      expect(await forum.getPostCount()).to.equal(3n);
-      expect(await forum.userPostCount(owner.address)).to.equal(3n);
-
-      const postIds = await forum.getPostsByCommunity(1n);
-      expect(postIds.map((id: bigint) => id)).to.deep.equal([1n, 2n, 3n]);
-    });
-
-    it("should not allow empty batch", async function () {
-      const forum = await deployForum();
-
-      await forum.createCommunity("Solidity", "cid-123", "a community");
-
-      await expect(
-        forum.batchCreatePosts(1n, [], [], [])
-      ).to.be.revertedWithCustomError(forum, "EmptyPostBatch");
-    });
   });
 
   describe("post moderation", function () {
@@ -301,47 +279,6 @@ describe("DecentralizedForum", function () {
     });
   });
 
-  describe("off-chain comments checkpoint", function () {
-    it("should not store comments on-chain and should allow moderator to update comments Merkle root", async function () {
-      const forum = await deployForum();
-
-      await forum.createCommunity("Solidity", "cid-123", "a community");
-      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
-
-      const root = ethers.keccak256(ethers.toUtf8Bytes("comments batch 1"));
-      await forum.updateCommentsMerkleRoot(1n, root);
-
-      const data = await forum.getCommentsMerkleRoot(1n);
-      expect(data[0]).to.equal(root);
-      expect(data[1]).to.be.greaterThan(0n);
-    });
-
-    it("should not allow a non-moderator to update comments Merkle root", async function () {
-      const forum = await deployForum();
-
-      await forum.createCommunity("Solidity", "cid-123", "a community");
-      await forum.connect(user1).joinCommunity(1n);
-      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
-
-      const root = ethers.keccak256(ethers.toUtf8Bytes("comments batch 1"));
-
-      await expect(
-        forum.connect(user1).updateCommentsMerkleRoot(1n, root)
-      ).to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
-    });
-
-    it("should not allow an empty comments Merkle root", async function () {
-      const forum = await deployForum();
-
-      await forum.createCommunity("Solidity", "cid-123", "a community");
-      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
-
-      await expect(
-        forum.updateCommentsMerkleRoot(1n, ethers.ZeroHash)
-      ).to.be.revertedWithCustomError(forum, "EmptyCommentsMerkleRoot");
-    });
-  });
-
   describe("read functions", function () {
     it("should return the correct community id for a post", async function () {
       const forum = await deployForum();
@@ -368,7 +305,8 @@ describe("DecentralizedForum", function () {
       await forum.createCommunity("Solidity", "cid-123", "a community");
       await forum.connect(user1).joinCommunity(1n);
       await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
-      await forum.batchCreatePosts(1n, ["post-cid-2", "post-cid-3"], ["t2", "t3"], ["", ""]);
+      await forum.createPost(1n, "post-cid-2", "t2", "");
+      await forum.createPost(1n, "post-cid-3", "t3", "");
 
       expect(await forum.getCommunityCount()).to.equal(1n);
       expect(await forum.getPostCount()).to.equal(3n);

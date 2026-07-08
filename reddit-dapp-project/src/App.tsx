@@ -10,6 +10,7 @@ import { loadLanguage, makeTranslator, LANGUAGE_STORAGE_KEY, type Language, type
 import { contractAddressForChain, NETWORK_NAMES } from './config'
 import {
   fetchApprovedComments,
+  fetchBannedUsers,
   fetchComments,
   fetchPendingComments,
   fetchReports,
@@ -25,8 +26,9 @@ import {
   searchPosts,
   searchUsers,
   type GraphActivity,
+  type GraphBannedUser,
   type GraphPost,
-  type GraphReport,
+  type GraphReportThread,
   type GraphUser,
 } from './graph'
 import './App.css'
@@ -151,6 +153,8 @@ type RemovalVote = {
   approvals: number
   required: number
   approvedByMe: boolean
+  reason: string
+  deadline: number
 }
 
 type SearchFilter = 'all' | 'posts' | 'communities' | 'users' | 'tags'
@@ -297,6 +301,10 @@ function App() {
   const [topActiveUsers, setTopActiveUsers] = useState<string[]>([])
   const [recommendInput, setRecommendInput] = useState('')
   const [removeTargetInput, setRemoveTargetInput] = useState('')
+  const [removeReasonInput, setRemoveReasonInput] = useState('')
+  const [banTargetInput, setBanTargetInput] = useState('')
+  const [banReasonInput, setBanReasonInput] = useState('')
+  const [bannedUsers, setBannedUsers] = useState<GraphBannedUser[]>([])
   const [showModeratorActionsModal, setShowModeratorActionsModal] = useState(false)
   const [removalVotes, setRemovalVotes] = useState<RemovalVote[]>([])
 
@@ -311,7 +319,7 @@ function App() {
   // Which kebab (three-dot moderator menu) is open: `post-<id>` or `comment-<id>`.
   const [openKebabId, setOpenKebabId] = useState<string | null>(null)
   // Content reports for the current community (shown to its moderators).
-  const [reports, setReports] = useState<GraphReport[]>([])
+  const [reports, setReports] = useState<GraphReportThread[]>([])
   // Open report dialog target: { kind: 0 post | 1 comment, id }.
   const [reportTarget, setReportTarget] = useState<{ kind: 0 | 1; id: string } | null>(null)
   const [reportReason, setReportReason] = useState('')
@@ -1032,11 +1040,13 @@ function App() {
         const proposalIds = await contract.getRemovalProposalsByCommunity(community.id)
         if (proposalIds.length === 0) continue
 
-        const required = await contract.getRequiredRemovalApprovals(community.id)
-
         for (const proposalId of proposalIds) {
           const proposal = await contract.getRemoveModeratorProposal(proposalId)
           if (proposal[5]) continue // already executed
+
+          const deadline = Number(proposal[9])
+          // Hide proposals that have expired (still valid on-chain but dead).
+          if (deadline * 1000 < Date.now()) continue
 
           const approvedByMe = await contract.hasApprovedRemoveModeratorProposal(proposalId, account)
 
@@ -1046,8 +1056,11 @@ function App() {
             communityName: community.name,
             target: proposal[2],
             approvals: Number(proposal[4]),
-            required: Number(required),
+            // Snapshotted threshold from the proposal itself, not recomputed.
+            required: Number(proposal[8]),
             approvedByMe,
+            reason: proposal[7],
+            deadline,
           })
         }
       }
@@ -1141,8 +1154,8 @@ function App() {
       const contract = await getContract(true)
       const tx =
         target.kind === 0
-          ? await contract.reportPost(target.id, reason)
-          : await contract.reportComment(target.id.replace(/^c-/, ''), reason)
+          ? await contract.reportPost(target.id.replace(/^[cp]-/, ''), reason)
+          : await contract.reportComment(target.id.replace(/^[cp]-/, ''), reason)
 
       setTemporaryStatus(t('txSent'))
       const receipt = await tx.wait()
@@ -1151,6 +1164,23 @@ function App() {
       setTemporaryStatus(t('reportSent'))
     } catch (error) {
       console.error('Report failed:', error)
+      failWith('reportFailed', error)
+    }
+  }
+
+  // Moderator closes out a content's reports: it leaves the open queue. action
+  // 1 = action taken (content handled), 0 = dismissed (report unfounded).
+  const resolveReport = async (kind: 0 | 1, refId: string, action: 0 | 1) => {
+    try {
+      const contract = await getContract(true)
+      const tx = await contract.resolveReport(kind, refId, action)
+      setTemporaryStatus(t('txSent'))
+      const receipt = await tx.wait()
+      await waitForGraphBlock(receipt.blockNumber)
+      await loadReports(selectedCommunityId)
+      setTemporaryStatus(action === 1 ? t('reportResolvedToast') : t('reportDismissedToast'))
+    } catch (error) {
+      console.error('Resolve report failed:', error)
       failWith('reportFailed', error)
     }
   }
@@ -1262,7 +1292,7 @@ function App() {
             status: Number(c[6]),
           }
           if (item.status === 0) pending.push(item)
-          if (item.status === 1) shown.push(item)
+          if (item.status === 1 && !hiddenCommentIds.has(c[0].toString())) shown.push(item)
         }
       }
 
@@ -1342,6 +1372,7 @@ function App() {
   }
 
   const loadModeratorInfo = async (communityId: string) => {
+    loadBannedUsers(communityId)
     try {
       const contract = await getContract(false)
       const addresses: string[] = await contract.getModeratorAddresses(communityId)
@@ -1977,6 +2008,12 @@ function App() {
       return
     }
 
+    const reason = removeReasonInput.trim()
+    if (!reason) {
+      alert(t('reasonRequired'))
+      return
+    }
+
     const target = await resolveUserInput(removeTargetInput)
     if (!target) {
       alert(t('userNotFound'))
@@ -1985,10 +2022,11 @@ function App() {
 
     try {
       const contract = await getContract(true)
-      const tx = await contract.proposeRemoveModerator(selectedCommunityId, target)
+      const tx = await contract.proposeRemoveModerator(selectedCommunityId, target, reason)
       setTemporaryStatus(t('removalSent'))
       await tx.wait()
       setRemoveTargetInput('')
+      setRemoveReasonInput('')
       await loadCommunities()
       await loadModeratorInfo(selectedCommunityId)
     } catch (error) {
@@ -2008,6 +2046,78 @@ function App() {
     } catch (error) {
       console.error('Removal approval failed:', error)
       failWith('removalApprovalFailed', error)
+    }
+  }
+
+  const loadBannedUsers = async (communityId: string) => {
+    const banned = await fetchBannedUsers(communityId)
+    setBannedUsers(banned || [])
+  }
+
+  // Moderator bans a member with a required reason.
+  const banMember = async () => {
+    if (!selectedCommunityId || !banTargetInput.trim()) {
+      alert(t('enterAddress'))
+      return
+    }
+    const reason = banReasonInput.trim()
+    if (!reason) {
+      alert(t('reasonRequired'))
+      return
+    }
+    const target = await resolveUserInput(banTargetInput)
+    if (!target) {
+      alert(t('userNotFound'))
+      return
+    }
+    try {
+      const contract = await getContract(true)
+      const tx = await contract.banUser(selectedCommunityId, target, reason)
+      setTemporaryStatus(t('txSent'))
+      const receipt = await tx.wait()
+      await waitForGraphBlock(receipt.blockNumber)
+      setBanTargetInput('')
+      setBanReasonInput('')
+      await loadCommunities()
+      await loadModeratorInfo(selectedCommunityId)
+      await loadBannedUsers(selectedCommunityId)
+      setTemporaryStatus(t('bannedToast'))
+    } catch (error) {
+      console.error('Ban failed:', error)
+      failWith('banFailed', error)
+    }
+  }
+
+  const unbanMember = async (target: string) => {
+    try {
+      const contract = await getContract(true)
+      const tx = await contract.unbanUser(selectedCommunityId, target)
+      setTemporaryStatus(t('txSent'))
+      const receipt = await tx.wait()
+      await waitForGraphBlock(receipt.blockNumber)
+      await loadBannedUsers(selectedCommunityId)
+      setTemporaryStatus(t('unbannedToast'))
+    } catch (error) {
+      console.error('Unban failed:', error)
+      failWith('banFailed', error)
+    }
+  }
+
+  // Members can leave for free, but it forfeits their activity points here.
+  const leaveCommunity = async (communityId: string) => {
+    if (!window.confirm(t('leaveConfirm'))) return
+    try {
+      const contract = await getContract(true)
+      const tx = await contract.leaveCommunity(communityId)
+      setTemporaryStatus(t('txSent'))
+      await tx.wait()
+      const account = await getCurrentWalletAddress()
+      await loadCommunities(account)
+      await loadModeratorInfo(communityId)
+      setTemporaryStatus(t('leftCommunityToast'))
+    } catch (error) {
+      console.error('Leave community failed:', error)
+      failWith('leaveFailed', error)
     }
   }
 
@@ -2058,9 +2168,10 @@ function App() {
     }
   }
 
-  // Hides a regular on-chain comment (ids prefixed c- in the merged list).
+  // Hides an on-chain comment. Ids are global now, so both clean (c-) and
+  // approved-formerly-flagged (p-) comments share one hide path.
   const hideChainComment = async (commentId: string) => {
-    const numericId = commentId.replace(/^c-/, '')
+    const numericId = commentId.replace(/^[cp]-/, '')
     try {
       const contract = await getContract(true)
       const tx = await contract.hideComment(numericId)
@@ -2574,10 +2685,25 @@ function App() {
               <div className="review-item" key={`report-${report.id}`}>
                 <div className="review-item-body">
                   <strong>{report.kind === 0 ? t('reportOnPost', { id: report.refId }) : t('reportOnComment', { id: report.refId })}</strong>
-                  <p className="rich-text">"{report.reason}"</p>
+                  <p className="rich-text">"{report.lastReason}"</p>
                   <small>
-                    {t('reportedBy')} {report.reporter.username ? `@${report.reporter.username}` : formatUser(report.reporter.id)} · {formatDate(report.createdAt)}
+                    {report.reportCount > 1 && <>{t('reportCount', { count: report.reportCount })} · </>}
+                    {formatDate(report.lastReportedAt)}
                   </small>
+                </div>
+                <div className="review-actions">
+                  <button
+                    className="primary-button"
+                    onClick={() => resolveReport(report.kind as 0 | 1, report.refId, 1)}
+                  >
+                    {t('reportActionTaken')}
+                  </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => resolveReport(report.kind as 0 | 1, report.refId, 0)}
+                  >
+                    {t('reportDismiss')}
+                  </button>
                 </div>
               </div>
             ))}
@@ -2628,6 +2754,11 @@ function App() {
             <button className="ghost-button" onClick={() => setShowCreateSubCommunityModal(true)}>
               {t('subCommunityButton')}
             </button>
+            {selectedCommunity.isMember && !selectedCommunity.moderatorRole?.isCreatorModerator && (
+              <button className="ghost-button" onClick={() => leaveCommunity(selectedCommunity.id)}>
+                {t('leaveCommunity')}
+              </button>
+            )}
           </div>
         </section>
 
@@ -3600,12 +3731,19 @@ function App() {
                   </button>
                 </div>
 
+                <hr className="tools-divider" />
                 <p className="muted-text">{t('removalIntro')}</p>
                 <input
                   type="text"
                   placeholder={t('removeAddrPh')}
                   value={removeTargetInput}
                   onChange={(event) => setRemoveTargetInput(event.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder={t('reasonPh')}
+                  value={removeReasonInput}
+                  onChange={(event) => setRemoveReasonInput(event.target.value)}
                 />
                 <button className="danger-button full" onClick={proposeRemoveModerator}>
                   {t('openRemoval')}
@@ -3621,9 +3759,11 @@ function App() {
                           <strong>
                             {t('removalVoteLine', { target: formatUser(vote.target), name: vote.communityName })}
                           </strong>
+                          {vote.reason && <small>"{vote.reason}"</small>}
                           <small>
                             {t('removalVoteProgress', { approvals: vote.approvals, required: vote.required })}
                           </small>
+                          <small>{t('expiresOn', { date: formatDate(vote.deadline) })}</small>
                           {vote.approvedByMe ? (
                             <small>{t('alreadyApprovedRemoval')}</small>
                           ) : (
@@ -3635,6 +3775,44 @@ function App() {
                       ))}
                   </div>
                 )}
+
+                <hr className="tools-divider" />
+                <div className="ban-box">
+                  <strong>{t('banTitle')}</strong>
+                  <p className="muted-text">{t('banBody')}</p>
+                  <input
+                    type="text"
+                    placeholder={t('banAddrPh')}
+                    value={banTargetInput}
+                    onChange={(event) => setBanTargetInput(event.target.value)}
+                  />
+                  <input
+                    type="text"
+                    placeholder={t('reasonPh')}
+                    value={banReasonInput}
+                    onChange={(event) => setBanReasonInput(event.target.value)}
+                  />
+                  <button className="danger-button full" onClick={banMember}>
+                    {t('banButton')}
+                  </button>
+
+                  {bannedUsers.length > 0 && (
+                    <div className="removal-votes-box">
+                      <strong>{t('bannedListTitle')}</strong>
+                      {bannedUsers.map((banned) => (
+                        <div className="notification-item" key={`banned-${banned.id}`}>
+                          <strong>
+                            {banned.user.username ? `@${banned.user.username}` : formatUser(banned.user.id)}
+                          </strong>
+                          <small>"{banned.reason}"</small>
+                          <button className="ghost-button" onClick={() => unbanMember(banned.user.id)}>
+                            {t('unbanButton')}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
                 {!selectedCommunity.moderatorRole?.isCreatorModerator && (
                   <>

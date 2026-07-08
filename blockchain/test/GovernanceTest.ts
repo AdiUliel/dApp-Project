@@ -202,7 +202,7 @@ describe("DecentralizedForum governance upgrade", function () {
     expect(await forum.getModeratorCount(1n)).to.equal(3n);
     expect(await forum.getRequiredRemovalApprovals(1n)).to.equal(2n);
 
-    await forum.proposeRemoveModerator(1n, user3.address);
+    await forum.proposeRemoveModerator(1n, user3.address, "misconduct");
     expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(true);
 
     await forum.connect(user4).approveRemoveModeratorProposal(1n);
@@ -218,5 +218,88 @@ describe("DecentralizedForum governance upgrade", function () {
     await forum.connect(user1).registerUsername("satoshi_99");
     expect(await forum.getAddressByUsername("satoshi_99")).to.equal(user1.address);
     expect(await forum.getAddressByUsername("nobody")).to.equal(ethers.ZeroAddress);
+  });
+
+  it("treats usernames and community names case-insensitively for uniqueness", async function () {
+    const forum = await deployForum();
+
+    await forum.connect(user1).registerUsername("Satoshi");
+    await expect(forum.connect(user2).registerUsername("satoshi"))
+      .to.be.revertedWithCustomError(forum, "UsernameAlreadyTaken");
+    // Lookups are case-insensitive too.
+    expect(await forum.getAddressByUsername("SATOSHI")).to.equal(user1.address);
+    expect(await forum.isUsernameAvailable("sAtOsHi")).to.equal(false);
+
+    await forum.createCommunity("Blockchain", "cid", "desc");
+    await expect(forum.connect(user1).createCommunity("blockchain", "cid2", "desc2"))
+      .to.be.revertedWithCustomError(forum, "CommunityNameAlreadyExists");
+  });
+
+  it("resets activity points on ban and on leave", async function () {
+    const forum = await deployForum();
+    await forum.createCommunity("react", "cid", "desc");
+    await forum.connect(user1).joinCommunity(1n);
+    await forum.connect(user1).createPost(1n, "cid-p", "t", "");
+    expect(await forum.activityScore(1n, user1.address)).to.be.greaterThan(0n);
+
+    await forum.connect(user1).leaveCommunity(1n);
+    expect(await forum.activityScore(1n, user1.address)).to.equal(0n);
+
+    // And ban wipes points too.
+    await forum.connect(user2).joinCommunity(1n);
+    await forum.connect(user2).createPost(1n, "cid-p2", "t", "");
+    expect(await forum.activityScore(1n, user2.address)).to.be.greaterThan(0n);
+    await forum.banUser(1n, user2.address, "spam");
+    expect(await forum.activityScore(1n, user2.address)).to.equal(0n);
+  });
+
+  it("snapshots the removal threshold and expires stale proposals", async function () {
+    const forum = await deployCommunityWithMembers();
+    await forum.recommendModerator(1n, user3.address);
+    await forum.connect(user3).acceptModeratorRole(1n); // mods: creator, user3
+
+    // 2 moderators -> threshold snapshot = (2+1)/2 = 1, so the proposer alone
+    // meets it and it executes immediately.
+    const proposalId = 1n;
+    await forum.proposeRemoveModerator(1n, user3.address, "left the project");
+    const proposal = await forum.getRemoveModeratorProposal(proposalId);
+    expect(proposal[7]).to.equal("left the project"); // reason
+    expect(proposal[8]).to.equal(1n); // requiredApprovals snapshot
+    expect(proposal[9]).to.be.greaterThan(0n); // deadline set
+    expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(false);
+  });
+
+  it("rejects approving an expired removal proposal", async function () {
+    const forum = await deployCommunityWithMembers();
+    // Appoint user3 and user4 so threshold is 2 (won't auto-execute on propose).
+    await forum.recommendModerator(1n, user3.address);
+    await forum.connect(user3).acceptModeratorRole(1n);
+    await forum.recommendModerator(1n, user4.address);
+    await forum.connect(user3).recommendModerator(1n, user4.address);
+    await forum.connect(user4).acceptModeratorRole(1n);
+
+    await forum.proposeRemoveModerator(1n, user3.address, "misconduct");
+
+    // Fast-forward past the 7-day expiration.
+    await ethers.provider.send("evm_increaseTime", [7 * 24 * 60 * 60 + 1]);
+    await ethers.provider.send("evm_mine", []);
+
+    await expect(forum.connect(user4).approveRemoveModeratorProposal(1n))
+      .to.be.revertedWithCustomError(forum, "ProposalExpired");
+    expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(true);
+  });
+
+  it("does not restore a pending or rejected post (invariant hidden)", async function () {
+    const forum = await deployForum();
+    await forum.createCommunity("react", "cid", "desc");
+    await forum.connect(user1).joinCommunity(1n);
+    await forum.connect(user1).createFlaggedPost(1n, "cid-p", "t", ""); // hidden + pending
+
+    await expect(forum.restorePost(1n))
+      .to.be.revertedWithCustomError(forum, "CannotRestoreModeratedPost");
+
+    await forum.rejectPendingPost(1n); // hidden + rejected
+    await expect(forum.restorePost(1n))
+      .to.be.revertedWithCustomError(forum, "CannotRestoreModeratedPost");
   });
 });

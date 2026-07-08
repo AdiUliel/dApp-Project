@@ -164,6 +164,7 @@ export type GraphPendingComment = {
   content: string
   imageCid: string
   status: number
+  hidden: boolean
   createdAt: string
   post: { id: string }
   author: { id: string; username: string | null }
@@ -171,7 +172,7 @@ export type GraphPendingComment = {
 
 export async function fetchPendingComments(communityId: string): Promise<GraphPendingComment[] | null> {
   const data = await graphQuery<{ pendingComments: GraphPendingComment[] }>(
-    `query ($community: String!) { pendingComments(where: { community: $community, status: 0 }, orderBy: createdAt, orderDirection: asc) { id content imageCid status createdAt post { id } author { id username } } }`,
+    `query ($community: String!) { pendingComments(where: { community: $community, status: 0 }, orderBy: createdAt, orderDirection: asc) { id content imageCid status hidden createdAt post { id } author { id username } } }`,
     { community: communityId }
   )
   return data ? data.pendingComments : null
@@ -179,7 +180,7 @@ export async function fetchPendingComments(communityId: string): Promise<GraphPe
 
 export async function fetchApprovedComments(postId: string): Promise<GraphPendingComment[] | null> {
   const data = await graphQuery<{ pendingComments: GraphPendingComment[] }>(
-    `query ($post: String!) { pendingComments(where: { post: $post, status: 1 }, orderBy: createdAt, orderDirection: asc) { id content imageCid status createdAt post { id } author { id username } } }`,
+    `query ($post: String!) { pendingComments(where: { post: $post, status: 1, hidden: false }, orderBy: createdAt, orderDirection: asc) { id content imageCid status hidden createdAt post { id } author { id username } } }`,
     { post: postId }
   )
   return data ? data.pendingComments : null
@@ -217,22 +218,43 @@ export async function fetchComments(communityId: string): Promise<GraphComment[]
   return data ? data.comments : null
 }
 
-export type GraphReport = {
+// One open thread per reported piece of content. Duplicates collapse into
+// reportCount, and once a moderator resolves/dismisses it (status != 0) it drops
+// out of this query, so the moderator queue only ever shows outstanding work.
+export type GraphReportThread = {
   id: string
   kind: number
   refId: string
-  reason: string
-  createdAt: string
-  reporter: { id: string; username: string | null }
+  status: number
+  reportCount: number
+  lastReason: string
+  firstReportedAt: string
+  lastReportedAt: string
 }
 
-// User reports of content in a community, newest first, for the moderator panel.
-export async function fetchReports(communityId: string): Promise<GraphReport[] | null> {
-  const data = await graphQuery<{ reports: GraphReport[] }>(
-    `query ($community: String!) { reports(where: { community: $community }, orderBy: createdAt, orderDirection: desc, first: 100) { id kind refId reason createdAt reporter { id username } } }`,
+export async function fetchReports(communityId: string, skip = 0): Promise<GraphReportThread[] | null> {
+  const data = await graphQuery<{ reportThreads: GraphReportThread[] }>(
+    `query ($community: String!, $skip: Int!) { reportThreads(where: { community: $community, status: 0 }, orderBy: lastReportedAt, orderDirection: desc, first: 100, skip: $skip) { id kind refId status reportCount lastReason firstReportedAt lastReportedAt } }`,
+    { community: communityId, skip }
+  )
+  return data ? data.reportThreads : null
+}
+
+export type GraphBannedUser = {
+  id: string
+  reason: string
+  bannedAt: string
+  user: { id: string; username: string | null }
+  bannedBy: { id: string; username: string | null }
+}
+
+// Banned users of a community (with the reason), for the moderator panel.
+export async function fetchBannedUsers(communityId: string): Promise<GraphBannedUser[] | null> {
+  const data = await graphQuery<{ bannedUsers: GraphBannedUser[] }>(
+    `query ($community: String!) { bannedUsers(where: { community: $community }, orderBy: bannedAt, orderDirection: desc, first: 100) { id reason bannedAt user { id username } bannedBy { id username } } }`,
     { community: communityId }
   )
-  return data ? data.reports : null
+  return data ? data.bannedUsers : null
 }
 
 export async function fetchUserProfile(address: string): Promise<GraphUser | null> {

@@ -22,6 +22,11 @@ dataSources:
         - Vote
         - Activity
         - Notification
+        - Comment
+        - PendingComment
+        - Report
+        - ReportThread
+        - BannedUser
       abis:
         - name: DecentralizedForum
           file: ./abis/DecentralizedForum.json
@@ -62,11 +67,17 @@ dataSources:
         - event: ContentReported(indexed uint256,indexed uint256,uint8,address,string,uint256)
           handler: handleContentReported
           receipt: true
+        - event: ReportResolved(indexed uint256,indexed uint256,indexed address,uint8,uint8,uint256)
+          handler: handleReportResolved
+          receipt: true
         - event: ModeratorAdded(indexed uint256,indexed address,indexed address,uint256)
           handler: handleModeratorAdded
           receipt: true
         - event: ModeratorRemoved(indexed uint256,indexed address,indexed address,uint256)
           handler: handleModeratorRemoved
+          receipt: true
+        - event: AppointedModeratorRoleRemoved(indexed uint256,indexed address,indexed address,uint256)
+          handler: handleAppointedModeratorRoleRemoved
           receipt: true
         - event: ModeratorRecommended(indexed uint256,indexed address,indexed address,uint256,uint256)
           handler: handleModeratorRecommended
@@ -77,7 +88,7 @@ dataSources:
         - event: ModeratorResigned(indexed uint256,indexed address,uint256)
           handler: handleModeratorResigned
           receipt: true
-        - event: RemoveModeratorProposalCreated(indexed uint256,indexed uint256,indexed address,address,uint256,uint256)
+        - event: RemoveModeratorProposalCreated(indexed uint256,indexed uint256,indexed address,address,uint256,string,uint256,uint256,uint256)
           handler: handleRemoveModeratorProposalCreated
           receipt: true
         - event: ActiveModeratorsUpdated(indexed uint256,address,address,uint256)
@@ -110,7 +121,7 @@ dataSources:
         - event: UsernameChanged(indexed address,string,string,uint256)
           handler: handleUsernameChanged
           receipt: true
-        - event: UserBanned(indexed uint256,indexed address,indexed address,uint256)
+        - event: UserBanned(indexed uint256,indexed address,indexed address,string,uint256)
           handler: handleUserBanned
           receipt: true
         - event: UserUnbanned(indexed uint256,indexed address,indexed address,uint256)

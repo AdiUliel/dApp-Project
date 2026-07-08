@@ -8,9 +8,20 @@ contract DecentralizedForum {
 
     uint256 public constant POST_ACTIVITY_POINTS = 5;
     uint256 public constant MODERATOR_RECOMMENDATIONS_REQUIRED = 3;
+    // A moderator-removal vote is only valid for this long after it opens.
+    uint256 public constant REMOVAL_PROPOSAL_DURATION = 7 days;
     uint256 public constant USERNAME_CHANGE_FEE = 0.05 ether;
     uint256 public constant USERNAME_MIN_LENGTH = 3;
     uint256 public constant USERNAME_MAX_LENGTH = 20;
+
+    // On-chain input length caps (bytes). Kept private (no public getter) to save
+    // bytecode; the values are asserted directly in the tests.
+    uint256 private constant MAX_TITLE_LENGTH = 200;
+    uint256 private constant MAX_TAGS_LENGTH = 500;
+    uint256 private constant MAX_COMMENT_LENGTH = 5000;
+    uint256 private constant MAX_REASON_LENGTH = 500;
+    uint256 private constant MAX_CID_LENGTH = 200;
+    uint256 private constant MAX_DESCRIPTION_LENGTH = 2000;
 
     // STRUCTS //
     struct Community {
@@ -42,6 +53,11 @@ contract DecentralizedForum {
         uint256 approvals;
         bool executed;
         bool exists;
+        string reason;
+        // Snapshotted at creation so a later change in moderator count can't move
+        // the goalposts, and a deadline so a stale vote can't linger forever.
+        uint256 requiredApprovals;
+        uint256 deadline;
     }
 
     // STORAGE //
@@ -69,10 +85,12 @@ contract DecentralizedForum {
     mapping(uint256 => address[]) private moderatorCandidates;
     mapping(uint256 => mapping(address => bool)) private isModeratorCandidateKnown;
 
-    // Anonymous member recommendations: MODERATOR_RECOMMENDATIONS_REQUIRED
-    // distinct votes open a moderator offer the candidate must accept.
-    // Rounds invalidate old votes whenever an offer is resolved or cancelled,
-    // so a fresh nomination always starts from zero.
+    // Named (non-anonymous) moderator recommendations - hasRecommendedModerator
+    // publicly reveals who recommended whom, and that is intended.
+    // MODERATOR_RECOMMENDATIONS_REQUIRED distinct votes open a moderator offer
+    // the candidate must accept. A recommendation keeps counting even if its
+    // author later stops being a moderator. Rounds invalidate old votes whenever
+    // an offer is resolved or cancelled, so a fresh nomination starts from zero.
     mapping(uint256 => mapping(address => uint256)) private recommendationRound;
     mapping(uint256 => mapping(address => uint256)) private recommendationCount;
     mapping(bytes32 => bool) private recommendedInRound;
@@ -86,9 +104,6 @@ contract DecentralizedForum {
     mapping(address => uint256) public userPostCount;
     mapping(address => uint256) public userCommunityCount;
 
-    // Optional cryptographic checkpoint for off-chain comments.
-    mapping(uint256 => bytes32) private commentsMerkleRootByPost;
-    mapping(uint256 => uint256) private commentsMerkleRootUpdatedAt;
 
     mapping(address => string) private usernames;
     mapping(bytes32 => bool) private usernameExists;
@@ -111,12 +126,12 @@ contract DecentralizedForum {
         bool exists;
     }
 
-    uint256 private nextPendingCommentId = 1;
     mapping(uint256 => PendingComment) private pendingComments;
     mapping(uint256 => uint256[]) private pendingCommentIdsByPost;
 
     // Clean comments are event-only (content carried in the log, indexed by The
     // Graph) so they cost minimal bytecode and still flow through the dApp.
+    // Shared by clean AND flagged comments so ids never collide (see #13).
     uint256 private nextCommentId = 1;
 
     // Locked posts stay visible but accept no new comments (clean or flagged).
@@ -126,6 +141,10 @@ contract DecentralizedForum {
     mapping(uint256 => uint256) private commentPostIds;
     mapping(uint256 => bool) public commentHidden;
 
+    // Prevents the same address reporting the same content twice.
+    // key = keccak256(reporter, kind, refId).
+    mapping(bytes32 => bool) private hasReported;
+
     // ERRORS //
     error CommunityDoesNotExist();
     error PostDoesNotExist();
@@ -133,8 +152,6 @@ contract DecentralizedForum {
     error EmptyCommunityName();
     error EmptyMetadataCID();
     error EmptyContentCID();
-    error EmptyPostBatch();
-    error EmptyCommentsMerkleRoot();
     error EmptyAddress();
     error CommunityNameAlreadyExists();
     error AlreadyCommunityMember();
@@ -151,6 +168,8 @@ contract DecentralizedForum {
     error CannotRemoveActiveModeratorWithVote();
     error ModeratorProposalAlreadyApproved();
     error ProposalAlreadyExecuted();
+    error ProposalExpired();
+    error CannotRestoreModeratedPost();
     error AlreadyRecommended();
     error CannotRecommendSelf();
     error ModeratorOfferAlreadyPending();
@@ -176,6 +195,10 @@ contract DecentralizedForum {
     error CommentDoesNotExist();
     error CommentNotPendingReview();
     error EmptyCommentContent();
+    error EmptyTitle();
+    error InputTooLong();
+    error MustJoinCommunityFirst();
+    error AlreadyReported();
 
     // EVENTS //
     event CommunityCreated(
@@ -222,7 +245,19 @@ contract DecentralizedForum {
         uint256 addedAt
     );
 
+    // Emitted when someone stops being a moderator by ANY path (removal vote,
+    // ban, leave, resign) - i.e. they have lost all moderator access.
     event ModeratorRemoved(
+        uint256 indexed communityId,
+        address indexed moderator,
+        address indexed removedBy,
+        uint256 removedAt
+    );
+
+    // Emitted when only the appointed role is stripped by a removal vote. The
+    // person may still be a moderator via the creator or active-moderator role;
+    // ModeratorRemoved fires in the same tx only if they lost everything.
+    event AppointedModeratorRoleRemoved(
         uint256 indexed communityId,
         address indexed moderator,
         address indexed removedBy,
@@ -274,6 +309,9 @@ contract DecentralizedForum {
         address indexed target,
         address proposer,
         uint256 approvals,
+        string reason,
+        uint256 requiredApprovals,
+        uint256 deadline,
         uint256 createdAt
     );
 
@@ -296,6 +334,7 @@ contract DecentralizedForum {
         uint256 indexed communityId,
         address indexed user,
         address indexed bannedBy,
+        string reason,
         uint256 bannedAt
     );
 
@@ -339,13 +378,6 @@ contract DecentralizedForum {
         uint256 restoredAt
     );
 
-    event CommentsMerkleRootUpdated(
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        bytes32 commentsMerkleRoot,
-        address indexed updatedBy,
-        uint256 updatedAt
-    );
 
     event UsernameRegistered(
         address indexed user,
@@ -424,6 +456,18 @@ contract DecentralizedForum {
         address reporter,
         string reason,
         uint256 reportedAt
+    );
+
+    // A moderator closed out the reports on a piece of content. The subgraph
+    // flips the content's report thread to resolved so it leaves the open queue.
+    // action 0 = dismissed (report unfounded), 1 = action taken.
+    event ReportResolved(
+        uint256 indexed communityId,
+        uint256 indexed refId,
+        address indexed resolvedBy,
+        uint8 kind,
+        uint8 action,
+        uint256 resolvedAt
     );
 
     event CommentSubmittedForReview(
@@ -543,6 +587,7 @@ contract DecentralizedForum {
         isMember[communityId][msg.sender] = true;
         joinedAt[communityId][msg.sender] = block.timestamp;
         communities[communityId].membersCount++;
+        userCommunityCount[msg.sender]++;
         _trackKnownUser(communityId, msg.sender);
 
         emit CommunityJoined(
@@ -569,11 +614,15 @@ contract DecentralizedForum {
         isMember[communityId][msg.sender] = false;
         joinedAt[communityId][msg.sender] = 0;
         communities[communityId].membersCount--;
+        userCommunityCount[msg.sender]--;
 
         if (appointedModerators[communityId][msg.sender]) {
             appointedModerators[communityId][msg.sender] = false;
         }
 
+        // Leaving forfeits activity points in this community (you can't stay a
+        // moderator on a community you left), so rejoining starts from zero.
+        activityScore[communityId][msg.sender] = 0;
         _resetRecommendations(communityId, msg.sender);
         _refreshActiveModerators(communityId);
 
@@ -735,7 +784,7 @@ contract DecentralizedForum {
         );
     }
 
-    function proposeRemoveModerator(uint256 communityId, address target)
+    function proposeRemoveModerator(uint256 communityId, address target, string calldata reason)
         public
         communityMustExist(communityId)
         onlyCommunityModerator(communityId)
@@ -767,6 +816,10 @@ contract DecentralizedForum {
         proposal.proposer = msg.sender;
         proposal.approvals = 1;
         proposal.exists = true;
+        proposal.reason = reason;
+        // Threshold is fixed now, not recomputed at execution time.
+        proposal.requiredApprovals = getRequiredRemovalApprovals(communityId);
+        proposal.deadline = block.timestamp + REMOVAL_PROPOSAL_DURATION;
 
         removeModeratorProposalApprovedBy[proposalId][msg.sender] = true;
         removalProposalIdsByCommunity[communityId].push(proposalId);
@@ -777,6 +830,9 @@ contract DecentralizedForum {
             target,
             msg.sender,
             proposal.approvals,
+            reason,
+            proposal.requiredApprovals,
+            proposal.deadline,
             block.timestamp
         );
 
@@ -793,6 +849,10 @@ contract DecentralizedForum {
 
         if (proposal.executed) {
             revert ProposalAlreadyExecuted();
+        }
+
+        if (block.timestamp > proposal.deadline) {
+            revert ProposalExpired();
         }
 
         if (!_isModerator(proposal.communityId, msg.sender)) {
@@ -817,7 +877,11 @@ contract DecentralizedForum {
         return _tryExecuteRemoveModeratorProposal(proposalId);
     }
 
-    function banUser(uint256 communityId, address user)
+    // Moderators ban a member with a reason (indexed off-chain so other
+    // moderators can see why). A ban wipes the user's activity points in this
+    // community, so if they are ever unbanned they start fresh and cannot walk
+    // straight back into an active-moderator slot on old activity.
+    function banUser(uint256 communityId, address user, string calldata reason)
         external
         communityMustExist(communityId)
         onlyCommunityModerator(communityId)
@@ -846,6 +910,7 @@ contract DecentralizedForum {
             appointedModerators[communityId][user] = false;
         }
 
+        activityScore[communityId][user] = 0;
         _resetRecommendations(communityId, user);
         isBanned[communityId][user] = true;
         _refreshActiveModerators(communityId);
@@ -863,6 +928,7 @@ contract DecentralizedForum {
             communityId,
             user,
             msg.sender,
+            reason,
             block.timestamp
         );
     }
@@ -955,6 +1021,9 @@ contract DecentralizedForum {
             revert EmptyCommentContent();
         }
 
+        _requireMaxLen(bytes(content).length, MAX_COMMENT_LENGTH);
+        _requireMaxLen(bytes(imageCid).length, MAX_CID_LENGTH);
+
         uint256 communityId = posts[postId].communityId;
 
         if (isBanned[communityId][msg.sender]) {
@@ -992,6 +1061,9 @@ contract DecentralizedForum {
             revert EmptyCommentContent();
         }
 
+        _requireMaxLen(bytes(content).length, MAX_COMMENT_LENGTH);
+        _requireMaxLen(bytes(imageCid).length, MAX_CID_LENGTH);
+
         uint256 communityId = posts[postId].communityId;
 
         // Ban wins over the membership check: banUser also strips membership,
@@ -1008,8 +1080,11 @@ contract DecentralizedForum {
             revert PostIsLocked();
         }
 
-        uint256 commentId = nextPendingCommentId;
-        nextPendingCommentId++;
+        // Clean and flagged comments share ONE global id space (nextCommentId) so
+        // an id like "1" is never ambiguous between the two, and every comment can
+        // travel the same hide/report path once it is visible.
+        uint256 commentId = nextCommentId;
+        nextCommentId++;
 
         pendingComments[commentId] = PendingComment({
             id: commentId,
@@ -1038,6 +1113,10 @@ contract DecentralizedForum {
     function approvePendingComment(uint256 commentId) external {
         PendingComment storage comment = _pendingCommentForReview(commentId);
         comment.status = 1;
+
+        // Now that it is public, register it in the same commentId -> postId map
+        // the clean comments use, so hideComment / reportComment work on it too.
+        commentPostIds[commentId] = comment.postId;
 
         emit PendingCommentApproved(
             commentId,
@@ -1079,36 +1158,19 @@ contract DecentralizedForum {
         return comment;
     }
 
-    function batchCreatePosts(
-        uint256 communityId,
-        string[] calldata contentCIDs,
-        string[] calldata titles,
-        string[] calldata tagsList
-    )
-        external
-        communityMustExist(communityId)
-        onlyCommunityMember(communityId)
-        notBanned(communityId)
-    {
-        if (contentCIDs.length == 0) {
-            revert EmptyPostBatch();
-        }
-
-        if (contentCIDs.length != titles.length || contentCIDs.length != tagsList.length) {
-            revert EmptyPostBatch();
-        }
-
-        for (uint256 i = 0; i < contentCIDs.length; i++) {
-            _createPost(communityId, contentCIDs[i], titles[i], tagsList[i], msg.sender, false);
-        }
-    }
-
     function votePost(uint256 postId, int8 vote)
         external
         postMustExist(postId)
     {
         if (vote < -1 || vote > 1) {
             revert InvalidVoteValue();
+        }
+
+        // Anti-spam: only accounts that actually belong to a community (a "real"
+        // participant) may vote. Brand-new wallets that never joined anything
+        // cannot brigade scores.
+        if (userCommunityCount[msg.sender] == 0) {
+            revert MustJoinCommunityFirst();
         }
 
         uint256 communityId = posts[postId].communityId;
@@ -1229,7 +1291,7 @@ contract DecentralizedForum {
         external
         postMustExist(postId)
     {
-        emit ContentReported(postId, posts[postId].communityId, 0, msg.sender, reason, block.timestamp);
+        _emitReport(0, postId, posts[postId].communityId, reason);
     }
 
     function reportComment(uint256 commentId, string calldata reason) external {
@@ -1237,7 +1299,50 @@ contract DecentralizedForum {
         if (postId == 0) {
             revert CommentDoesNotExist();
         }
-        emit ContentReported(commentId, posts[postId].communityId, 1, msg.sender, reason, block.timestamp);
+        _emitReport(1, commentId, posts[postId].communityId, reason);
+    }
+
+    // Shared report path: only real members can report, the reason is bounded,
+    // and one address cannot report the same content twice.
+    function _emitReport(uint8 kind, uint256 refId, uint256 communityId, string calldata reason) private {
+        if (userCommunityCount[msg.sender] == 0) {
+            revert MustJoinCommunityFirst();
+        }
+
+        _requireMaxLen(bytes(reason).length, MAX_REASON_LENGTH);
+
+        bytes32 reportKey = keccak256(abi.encodePacked(msg.sender, kind, refId));
+        if (hasReported[reportKey]) {
+            revert AlreadyReported();
+        }
+        hasReported[reportKey] = true;
+
+        emit ContentReported(refId, communityId, kind, msg.sender, reason, block.timestamp);
+    }
+
+    // A moderator closes out the reports on a piece of content. Off-chain the
+    // subgraph flips that content's report thread out of the open queue, so a
+    // handled report stops lingering. action 0 = dismissed, 1 = action taken.
+    function resolveReport(uint8 kind, uint256 refId, uint8 action) external {
+        uint256 communityId;
+        if (kind == 0) {
+            if (!posts[refId].exists) {
+                revert PostDoesNotExist();
+            }
+            communityId = posts[refId].communityId;
+        } else {
+            uint256 postId = commentPostIds[refId];
+            if (postId == 0) {
+                revert CommentDoesNotExist();
+            }
+            communityId = posts[postId].communityId;
+        }
+
+        if (!_isModerator(communityId, msg.sender)) {
+            revert OnlyCommunityModeratorAllowed();
+        }
+
+        emit ReportResolved(communityId, refId, msg.sender, kind, action, block.timestamp);
     }
 
     function restorePost(uint256 postId)
@@ -1247,6 +1352,13 @@ contract DecentralizedForum {
     {
         if (!posts[postId].hidden) {
             revert PostNotHidden();
+        }
+
+        // Invariant: pending => hidden and rejected => hidden. A post still in
+        // (or already out of) the review queue must not be made visible here;
+        // use approve/reject for those instead of restore.
+        if (postPendingReview[postId] || postRejected[postId]) {
+            revert CannotRestoreModeratedPost();
         }
 
         posts[postId].hidden = false;
@@ -1259,35 +1371,12 @@ contract DecentralizedForum {
         );
     }
 
-    function updateCommentsMerkleRoot(uint256 postId, bytes32 commentsMerkleRoot)
-        external
-        postMustExist(postId)
-        onlyCommunityModerator(posts[postId].communityId)
-    {
-        if (commentsMerkleRoot == bytes32(0)) {
-            revert EmptyCommentsMerkleRoot();
-        }
-
-        commentsMerkleRootByPost[postId] = commentsMerkleRoot;
-        commentsMerkleRootUpdatedAt[postId] = block.timestamp;
-
-        emit CommentsMerkleRootUpdated(
-            postId,
-            posts[postId].communityId,
-            commentsMerkleRoot,
-            msg.sender,
-            block.timestamp
-        );
-    }
-
     function registerUsername(string calldata username) external {
         if (bytes(usernames[msg.sender]).length != 0) {
             revert UsernameAlreadySet();
         }
 
-        _validateUsername(username);
-
-        bytes32 nameHash = keccak256(bytes(username));
+        bytes32 nameHash = keccak256(_validateUsername(username));
         if (usernameExists[nameHash]) {
             revert UsernameAlreadyTaken();
         }
@@ -1310,14 +1399,12 @@ contract DecentralizedForum {
             revert InsufficientUsernameChangeFee();
         }
 
-        _validateUsername(newUsername);
-
-        bytes32 newHash = keccak256(bytes(newUsername));
+        bytes32 newHash = keccak256(_validateUsername(newUsername));
         if (usernameExists[newHash]) {
             revert UsernameAlreadyTaken();
         }
 
-        bytes32 oldHash = keccak256(bytes(oldUsername));
+        bytes32 oldHash = keccak256(_toLower(bytes(oldUsername)));
         delete usernameExists[oldHash];
         delete usernameOwner[oldHash];
         usernameExists[newHash] = true;
@@ -1328,13 +1415,15 @@ contract DecentralizedForum {
     }
 
     // Community names are English-only: letters, digits, underscore, hyphen.
-    function _validateCommunityName(string calldata name) private pure {
+    // Returns the lowercased name for case-insensitive uniqueness checks.
+    function _validateCommunityName(string calldata name) private pure returns (bytes memory) {
         bytes memory nameBytes = bytes(name);
 
         if (nameBytes.length < 3 || nameBytes.length > 30) {
             revert InvalidCommunityName();
         }
 
+        bytes memory lower = new bytes(nameBytes.length);
         for (uint256 i = 0; i < nameBytes.length; i++) {
             bytes1 c = nameBytes[i];
             bool isLowerCase = (c >= 0x61 && c <= 0x7a);
@@ -1345,13 +1434,18 @@ contract DecentralizedForum {
             if (!isLowerCase && !isUpperCase && !isDigit && !isSeparator) {
                 revert InvalidCommunityName();
             }
+
+            lower[i] = isUpperCase ? bytes1(uint8(c) + 32) : c;
         }
+
+        return lower;
     }
 
     // Enforces format (charset, length) and anti-impersonation rules. Profanity
     // filtering is handled client-side; the chain only guarantees what it can
     // verify cheaply.
-    function _validateUsername(string calldata username) private pure {
+    // Returns the lowercased username for case-insensitive uniqueness checks.
+    function _validateUsername(string calldata username) private pure returns (bytes memory) {
         bytes memory nameBytes = bytes(username);
 
         if (nameBytes.length < USERNAME_MIN_LENGTH) {
@@ -1385,6 +1479,8 @@ contract DecentralizedForum {
         ) {
             revert ReservedUsername();
         }
+
+        return lower;
     }
 
     // Blocks a reserved token when it stands alone: the whole name, a prefix
@@ -1427,6 +1523,25 @@ contract DecentralizedForum {
         return c >= 0x61 && c <= 0x7a;
     }
 
+    // Lowercases ASCII A-Z so name uniqueness is case-insensitive ("Blockchain"
+    // and "blockchain" collide). Non-letters pass through unchanged.
+    function _toLower(bytes memory input) private pure returns (bytes memory) {
+        bytes memory out = new bytes(input.length);
+        for (uint256 i = 0; i < input.length; i++) {
+            bytes1 c = input[i];
+            out[i] = (c >= 0x41 && c <= 0x5a) ? bytes1(uint8(c) + 32) : c;
+        }
+        return out;
+    }
+
+    // Shared byte-length guard so a direct contract call can't store oversized
+    // strings (the UI limits inputs, but the chain must enforce it too).
+    function _requireMaxLen(uint256 len, uint256 limit) private pure {
+        if (len > limit) {
+            revert InputTooLong();
+        }
+    }
+
     function _createCommunity(
         string calldata name,
         string calldata metadataCID,
@@ -1438,13 +1553,17 @@ contract DecentralizedForum {
             revert EmptyCommunityName();
         }
 
-        _validateCommunityName(name);
+        bytes memory lowerName = _validateCommunityName(name);
 
         if (bytes(metadataCID).length == 0) {
             revert EmptyMetadataCID();
         }
 
-        bytes32 nameHash = keccak256(abi.encodePacked(parentCommunityId, name));
+        _requireMaxLen(bytes(metadataCID).length, MAX_CID_LENGTH);
+        _requireMaxLen(bytes(description).length, MAX_DESCRIPTION_LENGTH);
+
+        // Case-insensitive uniqueness scoped to the parent community.
+        bytes32 nameHash = keccak256(abi.encodePacked(parentCommunityId, lowerName));
         if (communityNameExists[nameHash]) {
             revert CommunityNameAlreadyExists();
         }
@@ -1524,6 +1643,14 @@ contract DecentralizedForum {
         if (bytes(contentCID).length == 0) {
             revert EmptyContentCID();
         }
+
+        if (bytes(title).length == 0) {
+            revert EmptyTitle();
+        }
+
+        _requireMaxLen(bytes(title).length, MAX_TITLE_LENGTH);
+        _requireMaxLen(bytes(tags).length, MAX_TAGS_LENGTH);
+        _requireMaxLen(bytes(contentCID).length, MAX_CID_LENGTH);
 
         uint256 postId = nextPostId;
         nextPostId++;
@@ -1665,33 +1792,32 @@ contract DecentralizedForum {
 
     function _tryExecuteRemoveModeratorProposal(uint256 proposalId) private returns (bool) {
         RemoveModeratorProposal storage proposal = removeModeratorProposals[proposalId];
-        uint256 requiredApprovals = getRequiredRemovalApprovals(proposal.communityId);
 
         if (
             proposal.executed ||
-            proposal.approvals < requiredApprovals ||
+            block.timestamp > proposal.deadline ||
+            proposal.approvals < proposal.requiredApprovals ||
             !appointedModerators[proposal.communityId][proposal.target]
         ) {
             return false;
         }
 
+        uint256 communityId = proposal.communityId;
+        address target = proposal.target;
+
         proposal.executed = true;
-        appointedModerators[proposal.communityId][proposal.target] = false;
-        _resetRecommendations(proposal.communityId, proposal.target);
+        appointedModerators[communityId][target] = false;
+        _resetRecommendations(communityId, target);
 
-        emit ModeratorRemoved(
-            proposal.communityId,
-            proposal.target,
-            msg.sender,
-            block.timestamp
-        );
+        // Losing the appointed role is distinct from losing all moderator access:
+        // a double-role moderator (also creator or active) keeps their status.
+        emit AppointedModeratorRoleRemoved(communityId, target, msg.sender, block.timestamp);
 
-        emit RemoveModeratorProposalExecuted(
-            proposalId,
-            proposal.communityId,
-            proposal.target,
-            block.timestamp
-        );
+        if (!_isModerator(communityId, target)) {
+            emit ModeratorRemoved(communityId, target, msg.sender, block.timestamp);
+        }
+
+        emit RemoveModeratorProposalExecuted(proposalId, communityId, target, block.timestamp);
 
         return true;
     }
@@ -1955,7 +2081,10 @@ contract DecentralizedForum {
             address proposer,
             uint256 approvals,
             bool executed,
-            bool exists
+            bool exists,
+            string memory reason,
+            uint256 requiredApprovals,
+            uint256 deadline
         )
     {
         RemoveModeratorProposal memory proposal = removeModeratorProposals[proposalId];
@@ -1966,7 +2095,10 @@ contract DecentralizedForum {
             proposal.proposer,
             proposal.approvals,
             proposal.executed,
-            proposal.exists
+            proposal.exists,
+            proposal.reason,
+            proposal.requiredApprovals,
+            proposal.deadline
         );
     }
 
@@ -2018,18 +2150,6 @@ contract DecentralizedForum {
         return posts[postId].hidden;
     }
 
-    function getCommentsMerkleRoot(uint256 postId)
-        external
-        view
-        postMustExist(postId)
-        returns (bytes32 root, uint256 updatedAt)
-    {
-        return (
-            commentsMerkleRootByPost[postId],
-            commentsMerkleRootUpdatedAt[postId]
-        );
-    }
-
     function getPendingCommentsByPost(uint256 postId)
         external
         view
@@ -2074,7 +2194,7 @@ contract DecentralizedForum {
     }
 
     function getAddressByUsername(string calldata username) external view returns (address) {
-        return usernameOwner[keccak256(bytes(username))];
+        return usernameOwner[keccak256(_toLower(bytes(username)))];
     }
 
     function isUsernameAvailable(string calldata username) external view returns (bool) {
@@ -2082,6 +2202,6 @@ contract DecentralizedForum {
             return false;
         }
 
-        return !usernameExists[keccak256(bytes(username))];
+        return !usernameExists[keccak256(_toLower(bytes(username)))];
     }
 }

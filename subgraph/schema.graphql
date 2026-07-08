@@ -57,13 +57,14 @@ type Comment @entity(immutable: false) {
 }
 
 type PendingComment @entity(immutable: false) {
-  id: ID! # on-chain pending comment id
+  id: ID! # on-chain comment id (shared global space with Comment)
   post: Post!
   community: Community!
   author: User!
   content: String!
   imageCid: String!
   status: Int! # 0 pending, 1 approved, 2 rejected
+  hidden: Boolean! # an approved comment can later be hidden by a moderator
   createdAt: BigInt!
 }
 
@@ -83,6 +84,32 @@ type Report @entity(immutable: true) {
   reporter: User!
   reason: String!
   createdAt: BigInt!
+}
+
+# One row per reported piece of content, so many reports collapse into a single
+# actionable item with a lifecycle (open -> resolved/dismissed). This is what the
+# moderator queue reads, so handled content leaves the list and duplicates fold in.
+type ReportThread @entity(immutable: false) {
+  id: ID! # communityId-kind-refId
+  community: Community!
+  kind: Int! # 0 = post, 1 = comment
+  refId: BigInt!
+  status: Int! # 0 open, 1 action taken, 2 dismissed
+  reportCount: Int!
+  lastReason: String!
+  firstReportedAt: BigInt!
+  lastReportedAt: BigInt!
+  resolvedBy: User
+  resolvedAt: BigInt
+}
+
+type BannedUser @entity(immutable: false) {
+  id: ID! # communityId-userAddress
+  community: Community!
+  user: User!
+  reason: String!
+  bannedBy: User!
+  bannedAt: BigInt!
 }
 
 enum ActivityType {
@@ -109,6 +136,7 @@ enum ActivityType {
   POST_LOCKED
   POST_UNLOCKED
   COMMENT_HIDDEN
+  APPOINTED_ROLE_REMOVED
 }
 
 type Activity @entity(immutable: true) {

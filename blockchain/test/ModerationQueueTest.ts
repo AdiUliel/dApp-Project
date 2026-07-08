@@ -157,7 +157,7 @@ describe("DecentralizedForum moderation queue", function () {
       await expect(forum.connect(user1).submitFlaggedComment(1n, "", ""))
         .to.be.revertedWithCustomError(forum, "EmptyCommentContent");
 
-      await forum.banUser(1n, user1.address);
+      await forum.banUser(1n, user1.address, "spam");
       await expect(forum.connect(user1).submitFlaggedComment(1n, "hello", ""))
         .to.be.revertedWithCustomError(forum, "UserBannedFromCommunity");
     });
@@ -211,7 +211,7 @@ describe("DecentralizedForum moderation queue", function () {
       await expect(forum.connect(user1).addComment(1n, "", ""))
         .to.be.revertedWithCustomError(forum, "EmptyCommentContent");
 
-      await forum.banUser(1n, user1.address);
+      await forum.banUser(1n, user1.address, "spam");
       await expect(forum.connect(user1).addComment(1n, "hello", ""))
         .to.be.revertedWithCustomError(forum, "UserBannedFromCommunity");
     });
@@ -286,10 +286,12 @@ describe("DecentralizedForum moderation queue", function () {
       const forum = await forumWithCommunity();
       await forum.createPost(1n, "cid-post", "a post", "");
       await forum.connect(user1).addComment(1n, "a comment", "");
+      // Reporters must belong to some community (anti-spam gate).
+      await forum.connect(user2).joinCommunity(1n);
       return forum;
     }
 
-    it("anyone can report a post, emitting ContentReported with kind 0", async function () {
+    it("a member can report a post, emitting ContentReported with kind 0", async function () {
       const forum = await forumWithComment();
 
       const tx = await forum.connect(user2).reportPost(1n, "spam");

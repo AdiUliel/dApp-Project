@@ -113,6 +113,10 @@ describe("DecentralizedForum usernames and votes", function () {
     it("applies up, down, switch, and removal correctly", async function () {
       const forum = await forumWithPost();
 
+      // Voters must belong to some community (anti-spam gate).
+      await forum.connect(user1).joinCommunity(1n);
+      await forum.connect(user2).joinCommunity(1n);
+
       await forum.connect(user1).votePost(1n, 1);
       expect(await forum.postScore(1n)).to.equal(1n);
 
@@ -131,8 +135,15 @@ describe("DecentralizedForum usernames and votes", function () {
 
     it("emits PostVoted with the new score", async function () {
       const forum = await forumWithPost();
+      await forum.connect(user1).joinCommunity(1n);
       await expect(forum.connect(user1).votePost(1n, 1))
         .to.emit(forum, "PostVoted");
+    });
+
+    it("rejects votes from users who joined no community", async function () {
+      const forum = await forumWithPost();
+      await expect(forum.connect(user1).votePost(1n, 1))
+        .to.be.revertedWithCustomError(forum, "MustJoinCommunityFirst");
     });
 
     it("rejects invalid values, missing posts, and banned users", async function () {
@@ -142,13 +153,14 @@ describe("DecentralizedForum usernames and votes", function () {
       await expect(forum.votePost(99n, 1)).to.be.revertedWithCustomError(forum, "PostDoesNotExist");
 
       await forum.connect(user1).joinCommunity(1n);
-      await forum.banUser(1n, user1.address);
+      await forum.banUser(1n, user1.address, "spam");
       await expect(forum.connect(user1).votePost(1n, 1))
         .to.be.revertedWithCustomError(forum, "UserBannedFromCommunity");
     });
 
     it("is idempotent for repeated identical votes", async function () {
       const forum = await forumWithPost();
+      await forum.connect(user1).joinCommunity(1n);
       await forum.connect(user1).votePost(1n, 1);
       await forum.connect(user1).votePost(1n, 1);
       expect(await forum.postScore(1n)).to.equal(1n);

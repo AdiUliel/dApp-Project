@@ -1,4 +1,4 @@
-import { BigInt, ethereum, Address } from '@graphprotocol/graph-ts'
+import { BigInt, ethereum, Address, store } from '@graphprotocol/graph-ts'
 import {
   CommunityCreated,
   SubCommunityCreated,
@@ -12,6 +12,7 @@ import {
   PostUnlocked,
   CommentHidden,
   ContentReported,
+  ReportResolved,
   ModeratorAdded,
   ModeratorRemoved,
   ModeratorRecommended,
@@ -23,6 +24,7 @@ import {
   UsernameChanged,
   UserBanned,
   UserUnbanned,
+  AppointedModeratorRoleRemoved,
   PostSubmittedForReview,
   PendingPostApproved,
   PendingPostRejected,
@@ -31,7 +33,7 @@ import {
   PendingCommentApproved,
   PendingCommentRejected,
 } from '../generated/DecentralizedForum/DecentralizedForum'
-import { User, Community, Post, Vote, Activity, Notification, Comment, PendingComment, Report } from '../generated/schema'
+import { User, Community, Post, Vote, Activity, Notification, Comment, PendingComment, Report, ReportThread, BannedUser } from '../generated/schema'
 
 const EMPTY_ADDRESS = '0x0000000000000000000000000000000000000000'
 
@@ -358,6 +360,27 @@ export function handleContentReported(event: ContentReported): void {
   report.createdAt = event.params.reportedAt
   report.save()
 
+  // Collapse repeated reports of the same content into one open thread. A fresh
+  // report on already-resolved content reopens it.
+  const threadId =
+    event.params.communityId.toString() + '-' + event.params.kind.toString() + '-' + event.params.refId.toString()
+  let thread = ReportThread.load(threadId)
+  if (thread == null) {
+    thread = new ReportThread(threadId)
+    thread.community = event.params.communityId.toString()
+    thread.kind = event.params.kind
+    thread.refId = event.params.refId
+    thread.reportCount = 0
+    thread.firstReportedAt = event.params.reportedAt
+  }
+  thread.status = 0
+  thread.reportCount = thread.reportCount + 1
+  thread.lastReason = event.params.reason
+  thread.lastReportedAt = event.params.reportedAt
+  thread.resolvedBy = null
+  thread.resolvedAt = null
+  thread.save()
+
   // Every moderator of the community gets told, so reports reach them on any machine.
   const community = Community.load(event.params.communityId.toString())
   if (community != null) {
@@ -365,20 +388,46 @@ export function handleContentReported(event: ContentReported): void {
   }
 }
 
+export function handleReportResolved(event: ReportResolved): void {
+  const threadId =
+    event.params.communityId.toString() + '-' + event.params.kind.toString() + '-' + event.params.refId.toString()
+  const thread = ReportThread.load(threadId)
+  if (thread == null) return
+
+  // action 1 = action taken, anything else = dismissed.
+  thread.status = event.params.action == 1 ? 1 : 2
+  thread.resolvedBy = getOrCreateUser(event.params.resolvedBy).id
+  thread.resolvedAt = event.params.resolvedAt
+  thread.save()
+}
+
 export function handleCommentHidden(event: CommentHidden): void {
-  const comment = Comment.load(event.params.commentId.toString())
-  if (comment == null) {
-    return
+  // Ids are global, so the hidden comment is either a clean Comment or an
+  // approved PendingComment - flip whichever exists.
+  const id = event.params.commentId.toString()
+  let author = ''
+  let content = ''
+
+  const comment = Comment.load(id)
+  if (comment != null) {
+    comment.hidden = true
+    comment.save()
+    author = comment.author
+    content = comment.content
+  } else {
+    const pending = PendingComment.load(id)
+    if (pending == null) return
+    pending.hidden = true
+    pending.save()
+    author = pending.author
+    content = pending.content
   }
 
-  comment.hidden = true
-  comment.save()
+  recordActivity(event, event.params.hiddenBy, 'COMMENT_HIDDEN', event.params.commentId, content)
 
-  recordActivity(event, event.params.hiddenBy, 'COMMENT_HIDDEN', event.params.commentId, comment.content)
-
-  const authorAddress = Address.fromString(comment.author)
+  const authorAddress = Address.fromString(author)
   if (!authorAddress.equals(event.params.hiddenBy)) {
-    notify(event, authorAddress, 'COMMENT_HIDDEN', event.params.hiddenBy, event.params.commentId, comment.content)
+    notify(event, authorAddress, 'COMMENT_HIDDEN', event.params.hiddenBy, event.params.commentId, content)
   }
 }
 
@@ -473,7 +522,7 @@ export function handleRemoveModeratorProposalCreated(event: RemoveModeratorPropo
     'REMOVAL_VOTE_PENDING',
     event.params.proposer,
     event.params.proposalId,
-    event.params.target.toHexString()
+    event.params.reason
   )
 }
 
@@ -610,6 +659,7 @@ export function handleCommentSubmittedForReview(event: CommentSubmittedForReview
   comment.content = event.params.content
   comment.imageCid = event.params.imageCid
   comment.status = 0
+  comment.hidden = false
   comment.createdAt = event.params.submittedAt
   comment.save()
 
@@ -682,11 +732,43 @@ export function handleUsernameChanged(event: UsernameChanged): void {
 }
 
 export function handleUserBanned(event: UserBanned): void {
+  // Record the ban with its reason so moderators can see the banned-users list
+  // and why each person is on it.
+  const id = event.params.communityId.toString() + '-' + event.params.user.toHexString()
+  const banned = new BannedUser(id)
+  banned.community = event.params.communityId.toString()
+  banned.user = getOrCreateUser(event.params.user).id
+  banned.reason = event.params.reason
+  banned.bannedBy = getOrCreateUser(event.params.bannedBy).id
+  banned.bannedAt = event.params.bannedAt
+  banned.save()
+
   recordActivity(event, event.params.bannedBy, 'USER_BANNED', event.params.communityId, event.params.user.toHexString())
-  notify(event, event.params.user, 'BANNED', event.params.bannedBy, event.params.communityId, '')
+  notify(event, event.params.user, 'BANNED', event.params.bannedBy, event.params.communityId, event.params.reason)
 }
 
 export function handleUserUnbanned(event: UserUnbanned): void {
+  const id = event.params.communityId.toString() + '-' + event.params.user.toHexString()
+  store.remove('BannedUser', id)
+
   recordActivity(event, event.params.unbannedBy, 'USER_UNBANNED', event.params.communityId, event.params.user.toHexString())
   notify(event, event.params.user, 'UNBANNED', event.params.unbannedBy, event.params.communityId, '')
+}
+
+// The appointed role was stripped by a removal vote. The person keeps any other
+// moderator role (creator or active), so this is distinct from ModeratorRemoved.
+export function handleAppointedModeratorRoleRemoved(event: AppointedModeratorRoleRemoved): void {
+  const community = Community.load(event.params.communityId.toString())
+  if (community != null) {
+    const moderatorId = event.params.moderator.toHexString()
+    const mods: string[] = []
+    const current = community.moderators
+    for (let i = 0; i < current.length; i++) {
+      if (current[i] != moderatorId) mods.push(current[i])
+    }
+    community.moderators = mods
+    community.save()
+  }
+
+  recordActivity(event, event.params.moderator, 'APPOINTED_ROLE_REMOVED', event.params.communityId, '')
 }
