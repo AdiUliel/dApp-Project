@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  blockchain:
+    name: Contract (compile, size gate, tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blockchain
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: blockchain/package-lock.json
+      - run: npm ci
+      - run: npm run compile
+      # Blocks the build if runtime bytecode crosses the EIP-170 24,576-byte
+      # limit (warns past a 23,000-byte soft budget). See scripts/check-size.cjs.
+      - run: npm run check-size
+      - run: npm test
+
+  frontend:
+    name: Frontend (typecheck)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reddit-dapp-project
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: reddit-dapp-project/package-lock.json
+      - run: npm ci
+      - run: npx tsc -b
+
+  subgraph:
+    name: Subgraph (codegen + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: subgraph
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: subgraph/package-lock.json
+      - run: npm ci
+      - run: npm run codegen
+      - run: npm run build

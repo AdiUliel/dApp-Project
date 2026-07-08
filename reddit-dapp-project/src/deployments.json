@@ -1,0 +1,12 @@
+{
+  "31337": {
+    "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "startBlock": 0,
+    "network": "localhost"
+  },
+  "11155111": {
+    "address": "0x49eEDCBdd425Df634A3c11405eE139f446d6141a",
+    "startBlock": 11216989,
+    "network": "sepolia"
+  }
+}

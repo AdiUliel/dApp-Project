@@ -31,12 +31,14 @@ export default defineConfig({
     hardhatMainnet: {
       type: "edr-simulated",
       chainType: "l1",
-      allowUnlimitedContractSize: true,
+      // Enforce the real EIP-170 24,576-byte limit in tests so an oversized
+      // contract fails locally, not only on a public network.
+      allowUnlimitedContractSize: false,
     },
     hardhatOp: {
       type: "edr-simulated",
       chainType: "op",
-      allowUnlimitedContractSize: true,
+      allowUnlimitedContractSize: false,
     },
     sepolia: {
       type: "http",

@@ -18,6 +18,10 @@ type Community @entity(immutable: false) {
   creator: User!
   parent: Community
   membersCount: BigInt!
+  # Count of publicly visible posts (not hidden/pending/rejected), maintained by
+  # the post handlers. Lets the frontend compute an exact page count for its
+  # first/skip pagination without ever loading the whole feed.
+  visiblePostsCount: BigInt!
   createdAt: BigInt!
   # Full moderator set (creator + appointed + the two active moderators),
   # maintained so review notifications can fan out to everyone.
@@ -74,6 +78,15 @@ type Vote @entity(immutable: false) {
   voter: User!
   value: Int!
   updatedAt: BigInt!
+}
+
+# Marks a (transaction, account) pair whose gas has already been added to the
+# account's running totals. One transaction emits several events (e.g. a single
+# createCommunity fires CommunityCreated + CommunityJoined + ModeratorAdded), and
+# recordActivity runs per event - without this guard the same gas would be
+# counted several times. Existence is all that matters.
+type AccountedTransaction @entity(immutable: true) {
+  id: ID! # transactionHash + "-" + userAddress
 }
 
 type Report @entity(immutable: true) {

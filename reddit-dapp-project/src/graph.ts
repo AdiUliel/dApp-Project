@@ -10,6 +10,10 @@ export function setGraphEndpoint(chainId: number) {
   graphEndpoint = GRAPH_ENDPOINTS[chainId] || ''
 }
 
+// Every graph call is capped at 5s: a hung graph-node must not freeze the UI.
+// A null result means "graph unavailable" and callers fall back to chain reads.
+export const GRAPH_TIMEOUT_MS = 5000
+
 export async function graphQuery<T>(query: string, variables: Record<string, unknown> = {}): Promise<T | null> {
   if (!graphEndpoint) return null
 
@@ -18,6 +22,8 @@ export async function graphQuery<T>(query: string, variables: Record<string, unk
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, variables }),
+      // Aborts the request (throws a TimeoutError) if the graph doesn't answer.
+      signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
     })
 
     if (!response.ok) return null
@@ -29,7 +35,14 @@ export async function graphQuery<T>(query: string, variables: Record<string, unk
     }
 
     return payload.data as T
-  } catch {
+  } catch (error) {
+    // Distinguish a timeout (graph too slow / hung) from other failures
+    // (offline, DNS, CORS) so slowness is diagnosable, not silently swallowed.
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      console.warn(`Graph query timed out after ${GRAPH_TIMEOUT_MS}ms; falling back to chain reads.`)
+    } else {
+      console.warn('Graph query failed (graph offline?):', error)
+    }
     return null
   }
 }
@@ -44,6 +57,8 @@ export type GraphPost = {
   downvotes: string
   hidden: boolean
   locked: boolean
+  pending: boolean
+  rejected: boolean
   createdAt: string
   community: { id: string; name: string }
   author: { id: string; username: string | null }
@@ -96,6 +111,8 @@ const POST_FIELDS = `
   downvotes
   hidden
   locked
+  pending
+  rejected
   createdAt
   community { id name }
   author { id username }
@@ -159,6 +176,74 @@ export async function fetchRecentPosts(limit: number): Promise<GraphPost[] | nul
   return data ? data.posts : null
 }
 
+export type GraphCommunityPage = {
+  posts: GraphPost[]
+  // Exact number of publicly visible posts in the community (maintained by the
+  // subgraph), so the pager can show real page numbers without loading the feed.
+  totalVisible: number
+}
+
+// One real page of a community's public feed: first/skip pagination done by the
+// graph, newest first, plus the total for the page count - a single query
+// replacing the old "read every post via eth_call" pattern.
+export async function fetchCommunityPage(
+  communityId: string,
+  first: number,
+  skip: number
+): Promise<GraphCommunityPage | null> {
+  const data = await graphQuery<{
+    posts: GraphPost[]
+    community: { visiblePostsCount: string } | null
+  }>(
+    `query ($community: String!, $id: ID!, $first: Int!, $skip: Int!) {
+      posts(where: { community: $community, hidden: false, pending: false, rejected: false }, orderBy: createdAt, orderDirection: desc, first: $first, skip: $skip) { ${POST_FIELDS} }
+      community(id: $id) { visiblePostsCount }
+    }`,
+    { community: communityId, id: communityId, first, skip }
+  )
+  if (!data) return null
+  return {
+    posts: data.posts,
+    totalVisible: data.community ? Number(data.community.visiblePostsCount) : data.posts.length,
+  }
+}
+
+// Non-public posts the viewer is allowed to see on top of the public page:
+// moderators get every hidden/pending/rejected post (bounded), a regular user
+// gets only their own. Small and bounded, so it rides along with any page.
+export async function fetchNonPublicPosts(
+  communityId: string,
+  viewer: string,
+  isModerator: boolean
+): Promise<GraphPost[] | null> {
+  if (!isModerator && !viewer) return []
+  const where = isModerator
+    ? `{ community: $community, hidden: true }`
+    : `{ community: $community, hidden: true, author: $viewer }`
+  const data = await graphQuery<{ posts: GraphPost[] }>(
+    `query ($community: String!, $viewer: String) { posts(where: ${where}, orderBy: createdAt, orderDirection: desc, first: 50) { ${POST_FIELDS} } }`,
+    { community: communityId, viewer: viewer.toLowerCase() }
+  )
+  return data ? data.posts : null
+}
+
+// The connected account's own votes on a set of posts, in ONE query - replaces
+// a postVotes eth_call per post.
+export async function fetchMyVotes(
+  account: string,
+  postIds: string[]
+): Promise<Record<string, number> | null> {
+  if (!account || postIds.length === 0) return {}
+  const data = await graphQuery<{ votes: { post: { id: string }; value: number }[] }>(
+    `query ($voter: String!, $posts: [String!]!) { votes(where: { voter: $voter, post_in: $posts }, first: ${Math.min(postIds.length, 100)}) { post { id } value } }`,
+    { voter: account.toLowerCase(), posts: postIds }
+  )
+  if (!data) return null
+  const byPost: Record<string, number> = {}
+  for (const vote of data.votes) byPost[vote.post.id] = vote.value
+  return byPost
+}
+
 export type GraphPendingComment = {
   id: string
   content: string
@@ -178,10 +263,12 @@ export async function fetchPendingComments(communityId: string): Promise<GraphPe
   return data ? data.pendingComments : null
 }
 
-export async function fetchApprovedComments(postId: string): Promise<GraphPendingComment[] | null> {
+// ALL approved formerly-flagged comments of a community in ONE query; the
+// frontend groups them by post. Replaces the old per-post query (N+1).
+export async function fetchApprovedComments(communityId: string): Promise<GraphPendingComment[] | null> {
   const data = await graphQuery<{ pendingComments: GraphPendingComment[] }>(
-    `query ($post: String!) { pendingComments(where: { post: $post, status: 1, hidden: false }, orderBy: createdAt, orderDirection: asc) { id content imageCid status hidden createdAt post { id } author { id username } } }`,
-    { post: postId }
+    `query ($community: String!) { pendingComments(where: { community: $community, status: 1, hidden: false }, orderBy: createdAt, orderDirection: asc, first: 500) { id content imageCid status hidden createdAt post { id } author { id username } } }`,
+    { community: communityId }
   )
   return data ? data.pendingComments : null
 }
@@ -195,18 +282,23 @@ export type GraphComment = {
   author: { id: string; username: string | null }
 }
 
-// Blocks until the graph has indexed up to the given block (or times out /
-// graph is offline). Call after a tx before re-querying graph-backed data,
-// otherwise the refresh races the indexer and reads stale results.
-export async function waitForGraphBlock(blockNumber: number, timeoutMs = 8000): Promise<void> {
+// Blocks until the graph has indexed up to the given block. Call after a tx
+// before re-querying graph-backed data, otherwise the refresh races the indexer
+// and reads stale results.
+// Returns true once the block is indexed; false if the graph is offline or the
+// wait times out - so the caller knows whether the data it's about to read is
+// actually up to date.
+export async function waitForGraphBlock(blockNumber: number, timeoutMs = 8000): Promise<boolean> {
   const start = Date.now()
 
   while (Date.now() - start < timeoutMs) {
     const data = await graphQuery<{ _meta: { block: { number: number } } }>('{ _meta { block { number } } }')
-    if (!data) return
-    if (data._meta.block.number >= blockNumber) return
+    if (!data) return false
+    if (data._meta.block.number >= blockNumber) return true
     await new Promise((resolve) => setTimeout(resolve, 400))
   }
+
+  return false
 }
 
 // Clean on-chain comments across a community (all its posts).

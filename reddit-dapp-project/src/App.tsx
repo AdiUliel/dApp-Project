@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ethers } from 'ethers'
 import contractArtifact from './DecentralizedForum.json'
-import { addJson, addFile, getJson, ipfsUrl } from './ipfs'
+import { addJson, addFile, getJson, ipfsUrl, confirmUploads, validateImageFile, MAX_IMAGES_PER_POST } from './ipfs'
 import Modal from './Modal'
 import { Composer, renderRichText } from './Composer'
 import { validateUsername, isValidCommunityName } from './usernamePolicy'
 import { checkContentSafety } from './contentSafety'
 import { loadLanguage, makeTranslator, LANGUAGE_STORAGE_KEY, type Language, type TranslationKey } from './i18n'
-import { contractAddressForChain, NETWORK_NAMES } from './config'
+import { contractAddressForChain, NETWORK_NAMES, SEPOLIA_CHAIN_ID } from './config'
 import {
   fetchApprovedComments,
   fetchBannedUsers,
   fetchComments,
+  fetchCommunityPage,
+  fetchMyVotes,
+  fetchNonPublicPosts,
   fetchPendingComments,
   fetchReports,
   fetchRecentPosts,
@@ -326,9 +329,14 @@ function App() {
   // Posts this user chose to hide from their own feed (personal, client-side).
   const [hiddenForMe, setHiddenForMe] = useState<string[]>([])
   const [showHiddenForMe, setShowHiddenForMe] = useState(false)
-  // Feed pagination.
+  // Feed pagination. The graph serves real pages (first/skip); totalVisiblePosts
+  // is the exact public-post count it maintains, so page numbers stay accurate
+  // without ever downloading the whole feed. feedServerPaged flips off only in
+  // the graph-offline chain fallback, where old-style client slicing takes over.
   const [postsPerPage, setPostsPerPage] = useState(10)
   const [feedPage, setFeedPage] = useState(1)
+  const [totalVisiblePosts, setTotalVisiblePosts] = useState(0)
+  const [feedServerPaged, setFeedServerPaged] = useState(true)
 
   // Deployment fingerprint (genesis block hash) that scopes localStorage keys,
   // so off-chain comments and read-notification marks from an older chain
@@ -381,11 +389,17 @@ function App() {
     return moderationVisiblePosts.filter((post) => !hiddenForMe.includes(post.id))
   }, [moderationVisiblePosts, hiddenForMe, showHiddenForMe])
 
-  const pageCount = Math.max(1, Math.ceil(visiblePosts.length / postsPerPage))
+  // Server-paged: the posts in state ARE the current page (plus the viewer's
+  // bounded non-public extras), so no client slicing - the count comes from the
+  // graph. Fallback (graph offline): everything was loaded, slice like before.
+  const pageCount = feedServerPaged
+    ? Math.max(1, Math.ceil(totalVisiblePosts / postsPerPage))
+    : Math.max(1, Math.ceil(visiblePosts.length / postsPerPage))
   const pagedPosts = useMemo(() => {
+    if (feedServerPaged) return visiblePosts
     const start = (feedPage - 1) * postsPerPage
     return visiblePosts.slice(start, start + postsPerPage)
-  }, [visiblePosts, feedPage, postsPerPage])
+  }, [visiblePosts, feedPage, postsPerPage, feedServerPaged])
 
   // Keep the current page in range when the list shrinks or the page size changes.
   useEffect(() => {
@@ -467,15 +481,20 @@ function App() {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, lang)
   }, [lang])
 
-  // Switching networks in MetaMask changes the contract/graph target; a full
-  // reload is the simplest way to re-resolve cleanly.
+  // Switching networks OR accounts in MetaMask changes the contract/graph target
+  // and the signed-in identity; a full reload is the simplest way to re-resolve
+  // cleanly and drop stale in-memory state.
   useEffect(() => {
     const ethereum = window.ethereum as { on?: (e: string, cb: () => void) => void; removeListener?: (e: string, cb: () => void) => void } | undefined
     if (!ethereum?.on) return
 
-    const onChainChanged = () => window.location.reload()
-    ethereum.on('chainChanged', onChainChanged)
-    return () => ethereum.removeListener?.('chainChanged', onChainChanged)
+    const onReload = () => window.location.reload()
+    ethereum.on('chainChanged', onReload)
+    ethereum.on('accountsChanged', onReload)
+    return () => {
+      ethereum.removeListener?.('chainChanged', onReload)
+      ethereum.removeListener?.('accountsChanged', onReload)
+    }
   }, [])
 
   useEffect(() => {
@@ -660,9 +679,16 @@ function App() {
     }
   }, [usernameInput])
 
+  // Real pagination: moving the pager (or resizing the page) asks the graph for
+  // that page instead of re-slicing an already-downloaded list.
+  useEffect(() => {
+    if (selectedCommunityId) loadPosts(selectedCommunityId, feedPage, postsPerPage)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feedPage, postsPerPage])
+
   useEffect(() => {
     if (selectedCommunityId) {
-      loadPosts(selectedCommunityId)
+      loadPosts(selectedCommunityId, 1, postsPerPage)
       loadModeratorInfo(selectedCommunityId)
       setSelectedPostId('')
     } else {
@@ -704,6 +730,43 @@ function App() {
     }
 
     return new ethers.BrowserProvider(window.ethereum as ethers.Eip1193Provider)
+  }
+
+  // Asks MetaMask to switch to Sepolia (adding it first if the wallet doesn't
+  // know it). On success MetaMask fires chainChanged, which reloads the app.
+  const SEPOLIA_HEX = '0x' + SEPOLIA_CHAIN_ID.toString(16)
+  const switchToSepolia = async () => {
+    const ethereum = window.ethereum as
+      | { request?: (args: { method: string; params?: unknown[] }) => Promise<unknown> }
+      | undefined
+    if (!ethereum?.request) return false
+
+    try {
+      await ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: SEPOLIA_HEX }] })
+      return true
+    } catch (error) {
+      // 4902 = chain not added to the wallet yet; add it, then switching follows.
+      if ((error as { code?: number })?.code === 4902) {
+        try {
+          await ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [
+              {
+                chainId: SEPOLIA_HEX,
+                chainName: 'Sepolia',
+                nativeCurrency: { name: 'Sepolia Ether', symbol: 'ETH', decimals: 18 },
+                rpcUrls: ['https://ethereum-sepolia-rpc.publicnode.com'],
+                blockExplorerUrls: ['https://sepolia.etherscan.io'],
+              },
+            ],
+          })
+          return true
+        } catch {
+          return false
+        }
+      }
+      return false
+    }
   }
 
   const getCurrentWalletAddress = async () => {
@@ -755,9 +818,20 @@ function App() {
 
     const address = contractAddressForChain(chainId)
     if (!address) {
+      // Unknown network: offer to move the user onto Sepolia (the shared forum).
       const name = NETWORK_NAMES[chainId] || `chain ${chainId}`
       setTemporaryStatus(t('unsupportedNetwork', { network: name }))
+      await switchToSepolia()
       throw new Error(`Unsupported network: ${chainId}`)
+    }
+
+    // Guard against a stale/mis-configured address: if nothing is deployed there
+    // on the connected chain, every call would fail with opaque errors.
+    const code = await provider.getCode(address)
+    if (code === '0x') {
+      const name = NETWORK_NAMES[chainId] || `chain ${chainId}`
+      setTemporaryStatus(t('contractNotDeployed', { network: name }))
+      throw new Error(`No contract at ${address} on ${name}`)
     }
 
     setContractAddress(address)
@@ -1095,14 +1169,71 @@ function App() {
     }
   }
 
-  const loadPosts = async (communityId: string) => {
+  const loadPosts = async (communityId: string, page = feedPage, size = postsPerPage) => {
     try {
+      // Graph-first: ONE query returns the requested page of public posts
+      // (first/skip) with every status flag and the score already on it, plus the
+      // exact visible total for the pager. A second bounded query brings the
+      // non-public posts this viewer may see (moderator: all; user: their own).
+      // No more eth_call-per-post.
+      const isModeratorHere =
+        knownModeratorCommunities.current.has(communityId) ||
+        Boolean(communities.find((community) => community.id === communityId)?.isModerator)
+
+      const [pageData, extras] = await Promise.all([
+        fetchCommunityPage(communityId, size, (page - 1) * size),
+        fetchNonPublicPosts(communityId, walletAddress, isModeratorHere),
+      ])
+
+      if (pageData !== null) {
+        const seen = new Set<string>()
+        const merged: Post[] = []
+        for (const graphPost of [...pageData.posts, ...(extras || [])]) {
+          if (seen.has(graphPost.id)) continue
+          seen.add(graphPost.id)
+          merged.push({
+            id: graphPost.id,
+            communityId: graphPost.community.id,
+            author: graphPost.author.id,
+            contentCID: graphPost.contentCID,
+            createdAt: graphPost.createdAt,
+            hidden: graphPost.hidden,
+            locked: graphPost.locked,
+            pending: graphPost.pending,
+            rejected: graphPost.rejected,
+          })
+        }
+        merged.sort((a, b) => Number(b.createdAt) - Number(a.createdAt))
+
+        setPosts(merged)
+        setTotalVisiblePosts(pageData.totalVisible)
+        setFeedServerPaged(true)
+
+        // Scores came with the page; the viewer's own votes arrive in one query.
+        const scoreByPost = new Map<string, number>()
+        for (const graphPost of [...pageData.posts, ...(extras || [])]) {
+          scoreByPost.set(graphPost.id, Number(graphPost.score))
+        }
+        const ids = merged.map((post) => post.id)
+        const myVotes = await fetchMyVotes(walletAddress, ids)
+        if (myVotes !== null) {
+          const entries: Record<string, VoteInfo> = {}
+          for (const id of ids) entries[id] = { score: scoreByPost.get(id) ?? 0, myVote: myVotes[id] ?? 0 }
+          setVotesByPost((prev) => ({ ...prev, ...entries }))
+        } else {
+          loadVotesFor(ids)
+        }
+
+        loadOnChainComments(communityId, merged)
+        loadReports(communityId)
+        return
+      }
+
+      // ---- Graph offline: chain fallback (loads everything, client-side paging).
+      setFeedServerPaged(false)
       const contract = await getContract(false)
       const postIds = await contract.getPostsByCommunity(communityId)
 
-      // Load every post and its status flags in parallel. Previously each post
-      // waited for the one before it, so N posts meant N serial round-trips;
-      // now it's a single concurrent batch.
       const loadedPosts: Post[] = await Promise.all(
         postIds.map(async (id: bigint): Promise<Post> => {
           const [post, pending, rejected, locked] = await Promise.all([
@@ -1188,11 +1319,13 @@ function App() {
   // All on-chain comments for the community: clean ones (addComment) plus
   // approved flagged ones are shown together; pending flagged ones feed the
   // moderator queue. Prefers the graph, falls back to chain reads/logs.
+  // Three community-level queries total - approved comments arrive in ONE query
+  // and are grouped by post here, instead of a separate query per post (N+1).
   const loadOnChainComments = async (communityId: string, communityPosts: Post[]) => {
-    const [graphClean, graphPending, approvedPerPost] = await Promise.all([
+    const [graphClean, graphPending, graphApproved] = await Promise.all([
       fetchComments(communityId),
       fetchPendingComments(communityId),
-      Promise.all(communityPosts.map((post) => fetchApprovedComments(post.id))),
+      fetchApprovedComments(communityId),
     ])
 
     if (graphClean !== null && graphPending !== null) {
@@ -1217,20 +1350,18 @@ function App() {
         createdAt: Number(comment.createdAt),
         status: 1,
       }))
-      approvedPerPost.forEach((batch) => {
-        if (batch) {
-          batch.forEach((comment) => {
-            shown.push({
-              id: `p-${comment.id}`,
-              postId: comment.post.id,
-              author: comment.author.id,
-              content: comment.content,
-              imageCid: comment.imageCid,
-              createdAt: Number(comment.createdAt),
-              status: 1,
-            })
-          })
-        }
+      // Group-by-post happens on the client: each comment carries its post id,
+      // and the per-post rendering filters on it.
+      ;(graphApproved || []).forEach((comment) => {
+        shown.push({
+          id: `p-${comment.id}`,
+          postId: comment.post.id,
+          author: comment.author.id,
+          content: comment.content,
+          imageCid: comment.imageCid,
+          createdAt: Number(comment.createdAt),
+          status: 1,
+        })
       })
       shown.sort((a, b) => a.createdAt - b.createdAt)
       setOnChainComments(shown)
@@ -1689,14 +1820,20 @@ function App() {
     account: string,
     successMessage: string,
     failKey: TranslationKey,
+    uploadedCids: string[] = [],
   ) => {
     try {
       const receipt = await tx.wait()
-      if (receipt) await waitForGraphBlock(receipt.blockNumber)
+      // The tx that references these IPFS CIDs is now mined, so they're no longer
+      // orphan candidates - tell the upload service to keep them (see ARCHITECTURE.md).
+      if (uploadedCids.length > 0) void confirmUploads(uploadedCids)
+      // Know whether the graph actually caught up: if not, what we reload next
+      // may be stale, so tell the user it's still syncing instead of implying done.
+      const indexed = receipt ? await waitForGraphBlock(receipt.blockNumber) : false
       await loadPosts(communityId)
       await loadCommunities(account)
       await loadModeratorInfo(communityId)
-      setTemporaryStatus(successMessage)
+      setTemporaryStatus(indexed ? successMessage : `${successMessage} ${t('graphSyncPending')}`)
     } catch (error) {
       console.error('Transaction reconciliation failed:', error)
       await loadPosts(communityId).catch(() => {})
@@ -1799,6 +1936,7 @@ function App() {
         account,
         flagged ? t('postSubmittedForReview') : t('postPublished'),
         'postFailed',
+        [contentCID, ...imageCids],
       )
     } catch (error) {
       console.error('Post creation failed:', error)
@@ -2240,6 +2378,7 @@ function App() {
       const contract = await getContract(true)
       const tx = await contract.submitFlaggedComment(postId, content, imageCid)
       const receipt = await tx.wait()
+      if (imageCid) void confirmUploads([imageCid])
 
       setNewCommentByPost((previous) => ({ ...previous, [postId]: '' }))
       setCommentImageByPost((previous) => ({ ...previous, [postId]: undefined }))
@@ -2325,7 +2464,7 @@ function App() {
       setCommentImageByPost((previous) => ({ ...previous, [postId]: undefined }))
       setTemporaryStatus(t('commentConfirming'))
 
-      void reconcileAfterTx(tx, communityId, account, t('commentPostedOnChain'), 'commentSubmitFailed')
+      void reconcileAfterTx(tx, communityId, account, t('commentPostedOnChain'), 'commentSubmitFailed', imageCid ? [imageCid] : [])
     } catch (error) {
       console.error('On-chain comment failed:', error)
       failWith('commentSubmitFailed', error)
@@ -2804,8 +2943,23 @@ function App() {
                 multiple
                 onChange={(event) => {
                   const files = Array.from(event.target.files || [])
-                  setPostImages((previous) => [...previous, ...files])
                   event.target.value = ''
+                  // First-pass client filter (the upload service re-checks): drop
+                  // wrong types / oversized files and cap the count.
+                  const accepted: File[] = []
+                  for (const file of files) {
+                    if (postImages.length + accepted.length >= MAX_IMAGES_PER_POST) {
+                      alert(t('uploadTooMany', { max: MAX_IMAGES_PER_POST }))
+                      break
+                    }
+                    const err = validateImageFile(file)
+                    if (err) {
+                      alert(t(err as TranslationKey, { name: file.name }))
+                      continue
+                    }
+                    accepted.push(file)
+                  }
+                  if (accepted.length > 0) setPostImages((previous) => [...previous, ...accepted])
                 }}
               />
             </label>
@@ -3039,8 +3193,14 @@ function App() {
                                 accept="image/png,image/jpeg,image/gif,image/webp"
                                 onChange={(event) => {
                                   const file = event.target.files?.[0]
-                                  setCommentImageByPost((previous) => ({ ...previous, [post.id]: file }))
                                   event.target.value = ''
+                                  if (!file) return
+                                  const err = validateImageFile(file)
+                                  if (err) {
+                                    alert(t(err as TranslationKey, { name: file.name }))
+                                    return
+                                  }
+                                  setCommentImageByPost((previous) => ({ ...previous, [post.id]: file }))
                                 }}
                               />
                             </label>

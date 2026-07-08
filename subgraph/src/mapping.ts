@@ -33,7 +33,7 @@ import {
   PendingCommentApproved,
   PendingCommentRejected,
 } from '../generated/DecentralizedForum/DecentralizedForum'
-import { User, Community, Post, Vote, Activity, Notification, Comment, PendingComment, Report, ReportThread, BannedUser } from '../generated/schema'
+import { User, Community, Post, Vote, Activity, Notification, Comment, PendingComment, Report, ReportThread, BannedUser, AccountedTransaction } from '../generated/schema'
 
 const EMPTY_ADDRESS = '0x0000000000000000000000000000000000000000'
 
@@ -79,11 +79,18 @@ function recordActivity(
   const feeWei = gasUsed.times(event.transaction.gasPrice)
 
   // Only charge gas to the account that actually sent the transaction; events
-  // can describe other users (e.g. the candidate in ModeratorAdded).
+  // can describe other users (e.g. the candidate in ModeratorAdded). Guard with
+  // AccountedTransaction so a multi-event transaction is charged exactly once.
   if (event.transaction.from.equals(userAddress)) {
-    user.totalGasUsed = user.totalGasUsed.plus(gasUsed)
-    user.totalFeesWei = user.totalFeesWei.plus(feeWei)
-    user.save()
+    const accountedId = event.transaction.hash.toHexString() + '-' + userAddress.toHexString()
+    if (AccountedTransaction.load(accountedId) == null) {
+      const accounted = new AccountedTransaction(accountedId)
+      accounted.save()
+
+      user.totalGasUsed = user.totalGasUsed.plus(gasUsed)
+      user.totalFeesWei = user.totalFeesWei.plus(feeWei)
+      user.save()
+    }
   }
 
   // Address in the id so one event can record activity for several users
@@ -155,6 +162,17 @@ function notifyModerators(
   }
 }
 
+// Keeps Community.visiblePostsCount in sync as posts enter/leave public
+// visibility. Callers guard on the post's previous hidden state so a repeated
+// event can never double-count.
+function adjustVisiblePosts(communityId: string, delta: i32): void {
+  const community = Community.load(communityId)
+  if (community == null) return
+  community.visiblePostsCount = community.visiblePostsCount.plus(BigInt.fromI32(delta))
+  if (community.visiblePostsCount.lt(ZERO)) community.visiblePostsCount = ZERO
+  community.save()
+}
+
 function splitTags(tags: string): string[] {
   const parts = tags.split(',')
   const cleaned: string[] = []
@@ -176,6 +194,7 @@ export function handleCommunityCreated(event: CommunityCreated): void {
   community.description = event.params.description
   community.creator = creator.id
   community.membersCount = ONE
+  community.visiblePostsCount = ZERO
   community.createdAt = event.params.createdAt
   community.moderators = [creator.id]
   community.save()
@@ -249,6 +268,10 @@ export function handlePostCreated(event: PostCreated): void {
   post.createdAt = event.params.createdAt
   post.save()
 
+  // Counts as visible now; a flagged post's PostSubmittedForReview (same tx,
+  // later log) immediately takes it back out.
+  adjustVisiblePosts(post.community, 1)
+
   recordActivity(event, event.params.author, 'POST_CREATED', event.params.postId, event.params.title)
 }
 
@@ -310,6 +333,7 @@ export function handlePostHidden(event: PostHidden): void {
     return
   }
 
+  if (!post.hidden) adjustVisiblePosts(post.community, -1)
   post.hidden = true
   post.save()
 
@@ -437,6 +461,7 @@ export function handlePostRestored(event: PostRestored): void {
     return
   }
 
+  if (post.hidden) adjustVisiblePosts(post.community, 1)
   post.hidden = false
   post.save()
 
@@ -578,6 +603,7 @@ export function handlePostSubmittedForReview(event: PostSubmittedForReview): voi
   const post = Post.load(event.params.postId.toString())
   if (post == null) return
 
+  if (!post.hidden) adjustVisiblePosts(post.community, -1)
   post.pending = true
   post.hidden = true
   post.save()
@@ -599,6 +625,7 @@ export function handlePendingPostApproved(event: PendingPostApproved): void {
   const post = Post.load(event.params.postId.toString())
   if (post == null) return
 
+  if (post.hidden) adjustVisiblePosts(post.community, 1)
   post.pending = false
   post.hidden = false
   post.save()

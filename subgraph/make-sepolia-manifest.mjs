@@ -1,10 +1,15 @@
-// Generates subgraph.sepolia.yaml from subgraph.yaml (single source of truth):
-// swaps network/address/startBlock to the live Sepolia deployment. Run by
-// redeploy-sepolia.bat; the generated file is gitignored.
+// Generates subgraph.sepolia.yaml from subgraph.yaml: swaps network/address/
+// startBlock to the live Sepolia deployment. The address + startBlock come from
+// the canonical deployments/sepolia.json (single source of truth, shared with
+// the frontend), so they are never hand-edited here. Run by redeploy-sepolia.bat;
+// the generated file is gitignored.
 import fs from 'fs'
 
-const SEPOLIA_ADDRESS = '0x49eEDCBdd425Df634A3c11405eE139f446d6141a'
-const SEPOLIA_START_BLOCK = 11216989 // block the contract was deployed in
+const deployment = JSON.parse(
+  fs.readFileSync(new URL('../deployments/sepolia.json', import.meta.url), 'utf8'),
+)
+const SEPOLIA_ADDRESS = deployment.address
+const SEPOLIA_START_BLOCK = deployment.startBlock
 
 const manifest = fs.readFileSync(new URL('./subgraph.yaml', import.meta.url), 'utf8')
 const sepolia = manifest

@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "compile": "hardhat compile",
-    "test": "hardhat test"
+    "postcompile": "node scripts/sync-artifacts.cjs",
+    "sync": "node scripts/sync-artifacts.cjs",
+    "test": "hardhat test",
+    "check-size": "node scripts/check-size.cjs"
   },
   "keywords": [],
   "author": "",
