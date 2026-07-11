@@ -20,16 +20,16 @@
     "network": "sepolia",
     "contracts": {
       "DecentralizedForum": {
-        "address": "0x021cc657D6B63c6B23bED4cf9A7d9a2457f0f29E",
-        "startBlock": 11244720
+        "address": "0xA6B7447627dd619e7d879Ea51dc20C83e11c0026",
+        "startBlock": 11252513
       },
       "UsernameRegistry": {
-        "address": "0x63d5b97665F27eaf7Ffa4B97ef851c4daA41d92A",
-        "startBlock": 11244732
+        "address": "0xE9e2ab15ac5480cde5cB6cfBfA0c46ca8C89C016",
+        "startBlock": 11252513
       },
       "ForumModeration": {
-        "address": "0xb3C16C2196f466D86e4D9400538dB6A3f4950eCF",
-        "startBlock": 11244737
+        "address": "0x6948e73c144B6bb5016DA94daf3Ef7C558A3FAb4",
+        "startBlock": 11252518
       }
     }
   }

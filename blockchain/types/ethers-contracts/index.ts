@@ -12,7 +12,7 @@ export type { IDecentralizedForum } from './ForumInterfaces.sol/IDecentralizedFo
 export { IDecentralizedForum__factory } from './factories/ForumInterfaces.sol/IDecentralizedForum__factory.js';
 export type { IForumModeration } from './ForumInterfaces.sol/IForumModeration.js';
 export { IForumModeration__factory } from './factories/ForumInterfaces.sol/IForumModeration__factory.js';
-export type { DecentralizedForum } from './mainContract.sol/DecentralizedForum.js';
-export { DecentralizedForum__factory } from './factories/mainContract.sol/DecentralizedForum__factory.js';
 export { ForumModeration__factory } from './factories/ForumModeration__factory.js';
 export { UsernameRegistry__factory } from './factories/UsernameRegistry__factory.js';
+export type { DecentralizedForum } from './mainContract.sol/DecentralizedForum.js';
+export { DecentralizedForum__factory } from './factories/mainContract.sol/DecentralizedForum__factory.js';
