@@ -10,13 +10,29 @@ import * as Contracts from "./index.js";
 
 declare module "@nomicfoundation/hardhat-ethers/types" {
   interface HardhatEthersHelpers extends HardhatEthersHelpersBase {
-  getContractFactory(name: 'DecentralizedForum', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.DecentralizedForum__factory>
+  getContractFactory(name: 'IDecentralizedForum', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.IDecentralizedForum__factory>
+getContractFactory(name: 'IForumModeration', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.IForumModeration__factory>
+getContractFactory(name: 'DecentralizedForum', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.DecentralizedForum__factory>
+getContractFactory(name: 'ForumModeration', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.ForumModeration__factory>
+getContractFactory(name: 'UsernameRegistry', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.UsernameRegistry__factory>
 
-  getContractAt(name: 'DecentralizedForum', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.DecentralizedForum>
+  getContractAt(name: 'IDecentralizedForum', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.IDecentralizedForum>
+getContractAt(name: 'IForumModeration', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.IForumModeration>
+getContractAt(name: 'DecentralizedForum', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.DecentralizedForum>
+getContractAt(name: 'ForumModeration', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.ForumModeration>
+getContractAt(name: 'UsernameRegistry', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.UsernameRegistry>
 
-  deployContract(name: 'DecentralizedForum', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.DecentralizedForum>
+  deployContract(name: 'IDecentralizedForum', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.IDecentralizedForum>
+deployContract(name: 'IForumModeration', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.IForumModeration>
+deployContract(name: 'DecentralizedForum', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.DecentralizedForum>
+deployContract(name: 'ForumModeration', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.ForumModeration>
+deployContract(name: 'UsernameRegistry', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.UsernameRegistry>
 
-  deployContract(name: 'DecentralizedForum', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.DecentralizedForum>
+  deployContract(name: 'IDecentralizedForum', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.IDecentralizedForum>
+deployContract(name: 'IForumModeration', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.IForumModeration>
+deployContract(name: 'DecentralizedForum', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.DecentralizedForum>
+deployContract(name: 'ForumModeration', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.ForumModeration>
+deployContract(name: 'UsernameRegistry', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.UsernameRegistry>
 
     // default types
     getContractFactory(

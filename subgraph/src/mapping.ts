@@ -6,13 +6,6 @@ import {
   CommunityLeft,
   PostCreated,
   PostVoted,
-  PostHidden,
-  PostRestored,
-  PostLocked,
-  PostUnlocked,
-  CommentHidden,
-  ContentReported,
-  ReportResolved,
   ModeratorAdded,
   ModeratorRemoved,
   ModeratorRecommended,
@@ -20,11 +13,19 @@ import {
   ModeratorResigned,
   RemoveModeratorProposalCreated,
   ActiveModeratorsUpdated,
-  UsernameRegistered,
-  UsernameChanged,
   UserBanned,
   UserUnbanned,
   AppointedModeratorRoleRemoved,
+} from '../generated/DecentralizedForum/DecentralizedForum'
+import { UsernameRegistered, UsernameChanged } from '../generated/UsernameRegistry/UsernameRegistry'
+import {
+  PostHidden,
+  PostRestored,
+  PostLocked,
+  PostUnlocked,
+  CommentHidden,
+  ContentReported,
+  ReportResolved,
   PostSubmittedForReview,
   PendingPostApproved,
   PendingPostRejected,
@@ -32,7 +33,7 @@ import {
   CommentSubmittedForReview,
   PendingCommentApproved,
   PendingCommentRejected,
-} from '../generated/DecentralizedForum/DecentralizedForum'
+} from '../generated/ForumModeration/ForumModeration'
 import { User, Community, Post, Vote, Activity, Notification, Comment, PendingComment, Report, ReportThread, BannedUser, AccountedTransaction } from '../generated/schema'
 
 const EMPTY_ADDRESS = '0x0000000000000000000000000000000000000000'

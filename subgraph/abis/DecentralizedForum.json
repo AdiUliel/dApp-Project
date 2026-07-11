@@ -1,6 +1,11 @@
 [
   {
     "inputs": [],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "inputs": [],
     "name": "AlreadyCommunityMember",
     "type": "error"
   },
@@ -12,11 +17,6 @@
   {
     "inputs": [],
     "name": "AlreadyRecommended",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "AlreadyReported",
     "type": "error"
   },
   {
@@ -41,26 +41,6 @@
   },
   {
     "inputs": [],
-    "name": "CannotRestoreModeratedPost",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "CommentAlreadyHidden",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "CommentDoesNotExist",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "CommentNotPendingReview",
-    "type": "error"
-  },
-  {
-    "inputs": [],
     "name": "CommunityDoesNotExist",
     "type": "error"
   },
@@ -72,11 +52,6 @@
   {
     "inputs": [],
     "name": "EmptyAddress",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "EmptyCommentContent",
     "type": "error"
   },
   {
@@ -96,12 +71,12 @@
   },
   {
     "inputs": [],
-    "name": "EmptyTitle",
+    "name": "EmptyPostBatch",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "EmptyUsername",
+    "name": "EmptyTitle",
     "type": "error"
   },
   {
@@ -111,22 +86,22 @@
   },
   {
     "inputs": [],
-    "name": "InsufficientUsernameChangeFee",
-    "type": "error"
-  },
-  {
-    "inputs": [],
     "name": "InvalidCommunityName",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "InvalidUsernameCharacter",
+    "name": "InvalidVoteValue",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "InvalidVoteValue",
+    "name": "ModerationContractAlreadySet",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ModerationContractNotSet",
     "type": "error"
   },
   {
@@ -147,11 +122,6 @@
   {
     "inputs": [],
     "name": "NoPendingModeratorOffer",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "NoUsernameSet",
     "type": "error"
   },
   {
@@ -181,37 +151,17 @@
   },
   {
     "inputs": [],
-    "name": "PostAlreadyHidden",
+    "name": "OnlyDeployerAllowed",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "PostAlreadyLocked",
+    "name": "OnlyModerationContractAllowed",
     "type": "error"
   },
   {
     "inputs": [],
     "name": "PostDoesNotExist",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "PostIsLocked",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "PostNotHidden",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "PostNotLocked",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "PostNotPendingReview",
     "type": "error"
   },
   {
@@ -231,37 +181,12 @@
   },
   {
     "inputs": [],
-    "name": "ReservedUsername",
-    "type": "error"
-  },
-  {
-    "inputs": [],
     "name": "UserBannedFromCommunity",
     "type": "error"
   },
   {
     "inputs": [],
     "name": "UserNotBannedFromCommunity",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "UsernameAlreadySet",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "UsernameAlreadyTaken",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "UsernameTooLong",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "UsernameTooShort",
     "type": "error"
   },
   {
@@ -324,141 +249,6 @@
       }
     ],
     "name": "AppointedModeratorRoleRemoved",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "commentId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "author",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "content",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "imageCid",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "createdAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "CommentCreated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "commentId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "hiddenBy",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "hiddenAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "CommentHidden",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "commentId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "author",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "content",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "imageCid",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "submittedAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "CommentSubmittedForReview",
     "type": "event"
   },
   {
@@ -577,49 +367,6 @@
       }
     ],
     "name": "CommunityMetadataUpdated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "refId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint8",
-        "name": "kind",
-        "type": "uint8"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "reporter",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "reason",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "reportedAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "ContentReported",
     "type": "event"
   },
   {
@@ -827,142 +574,6 @@
       {
         "indexed": true,
         "internalType": "uint256",
-        "name": "commentId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "moderator",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "approvedAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "PendingCommentApproved",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "commentId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "moderator",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "rejectedAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "PendingCommentRejected",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "moderator",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "approvedAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "PendingPostApproved",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "moderator",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "rejectedAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "PendingPostRejected",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
         "name": "postId",
         "type": "uint256"
       },
@@ -1004,167 +615,6 @@
       }
     ],
     "name": "PostCreated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "hiddenBy",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "hiddenAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "PostHidden",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "lockedBy",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "lockedAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "PostLocked",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "restoredBy",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "restoredAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "PostRestored",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "author",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "title",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "submittedAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "PostSubmittedForReview",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "unlockedBy",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "unlockedAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "PostUnlocked",
     "type": "event"
   },
   {
@@ -1351,49 +801,6 @@
       {
         "indexed": true,
         "internalType": "uint256",
-        "name": "refId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "resolvedBy",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint8",
-        "name": "kind",
-        "type": "uint8"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint8",
-        "name": "action",
-        "type": "uint8"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "resolvedAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "ReportResolved",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "communityId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
         "name": "parentCommunityId",
         "type": "uint256"
       },
@@ -1500,62 +907,6 @@
     "type": "event"
   },
   {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "user",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "oldUsername",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "newUsername",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "changedAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "UsernameChanged",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "user",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "username",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "registeredAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "UsernameRegistered",
-    "type": "event"
-  },
-  {
     "inputs": [],
     "name": "MODERATOR_RECOMMENDATIONS_REQUIRED",
     "outputs": [
@@ -1584,45 +935,6 @@
   {
     "inputs": [],
     "name": "REMOVAL_PROPOSAL_DURATION",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "USERNAME_CHANGE_FEE",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "USERNAME_MAX_LENGTH",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "USERNAME_MIN_LENGTH",
     "outputs": [
       {
         "internalType": "uint256",
@@ -1674,55 +986,6 @@
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "string",
-        "name": "content",
-        "type": "string"
-      },
-      {
-        "internalType": "string",
-        "name": "imageCid",
-        "type": "string"
-      }
-    ],
-    "name": "addComment",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "commentId",
-        "type": "uint256"
-      }
-    ],
-    "name": "approvePendingComment",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      }
-    ],
-    "name": "approvePendingPost",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
         "name": "proposalId",
         "type": "uint256"
       }
@@ -1735,6 +998,24 @@
         "type": "bool"
       }
     ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "communityId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "author",
+        "type": "address"
+      }
+    ],
+    "name": "awardPostApprovalActivity",
+    "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
   },
@@ -1764,33 +1045,29 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "newUsername",
-        "type": "string"
-      }
-    ],
-    "name": "changeUsername",
-    "outputs": [],
-    "stateMutability": "payable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "uint256",
-        "name": "",
+        "name": "communityId",
         "type": "uint256"
-      }
-    ],
-    "name": "commentHidden",
-    "outputs": [
+      },
       {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
+        "internalType": "string[]",
+        "name": "contentCIDs",
+        "type": "string[]"
+      },
+      {
+        "internalType": "string[]",
+        "name": "titles",
+        "type": "string[]"
+      },
+      {
+        "internalType": "string[]",
+        "name": "tagsList",
+        "type": "string[]"
       }
     ],
-    "stateMutability": "view",
+    "name": "batchCreatePosts",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -1930,25 +1207,6 @@
     "name": "declineModeratorRole",
     "outputs": [],
     "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "username",
-        "type": "string"
-      }
-    ],
-    "name": "getAddressByUsername",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -2214,74 +1472,6 @@
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "commentId",
-        "type": "uint256"
-      }
-    ],
-    "name": "getPendingComment",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "id",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "address",
-        "name": "author",
-        "type": "address"
-      },
-      {
-        "internalType": "string",
-        "name": "content",
-        "type": "string"
-      },
-      {
-        "internalType": "string",
-        "name": "imageCid",
-        "type": "string"
-      },
-      {
-        "internalType": "uint256",
-        "name": "createdAt",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint8",
-        "name": "status",
-        "type": "uint8"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      }
-    ],
-    "name": "getPendingCommentsByPost",
-    "outputs": [
-      {
-        "internalType": "uint256[]",
-        "name": "",
-        "type": "uint256[]"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
         "name": "postId",
         "type": "uint256"
       }
@@ -2316,11 +1506,6 @@
       {
         "internalType": "bool",
         "name": "exists",
-        "type": "bool"
-      },
-      {
-        "internalType": "bool",
-        "name": "hidden",
         "type": "bool"
       }
     ],
@@ -2531,25 +1716,6 @@
   {
     "inputs": [
       {
-        "internalType": "address",
-        "name": "user",
-        "type": "address"
-      }
-    ],
-    "name": "getUsername",
-    "outputs": [
-      {
-        "internalType": "string",
-        "name": "",
-        "type": "string"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "uint256",
         "name": "proposalId",
         "type": "uint256"
@@ -2561,6 +1727,25 @@
       }
     ],
     "name": "hasApprovedRemoveModeratorProposal",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      }
+    ],
+    "name": "hasJoinedAnyCommunity",
     "outputs": [
       {
         "internalType": "bool",
@@ -2628,32 +1813,6 @@
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "commentId",
-        "type": "uint256"
-      }
-    ],
-    "name": "hideComment",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      }
-    ],
-    "name": "hidePost",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
         "name": "",
         "type": "uint256"
       },
@@ -2688,25 +1847,6 @@
       }
     ],
     "name": "isMember",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      }
-    ],
-    "name": "isPostHidden",
     "outputs": [
       {
         "internalType": "bool",
@@ -2792,25 +1932,6 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "username",
-        "type": "string"
-      }
-    ],
-    "name": "isUsernameAvailable",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "uint256",
         "name": "communityId",
         "type": "uint256"
@@ -2859,70 +1980,13 @@
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      }
-    ],
-    "name": "lockPost",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "postLocked",
+    "inputs": [],
+    "name": "moderationContract",
     "outputs": [
       {
-        "internalType": "bool",
+        "internalType": "address",
         "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "postPendingReview",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "postRejected",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
+        "type": "address"
       }
     ],
     "stateMutability": "view",
@@ -3021,81 +2085,6 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "username",
-        "type": "string"
-      }
-    ],
-    "name": "registerUsername",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "commentId",
-        "type": "uint256"
-      }
-    ],
-    "name": "rejectPendingComment",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      }
-    ],
-    "name": "rejectPendingPost",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "commentId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "string",
-        "name": "reason",
-        "type": "string"
-      }
-    ],
-    "name": "reportComment",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "string",
-        "name": "reason",
-        "type": "string"
-      }
-    ],
-    "name": "reportPost",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "uint256",
         "name": "communityId",
         "type": "uint256"
@@ -3109,58 +2098,12 @@
   {
     "inputs": [
       {
-        "internalType": "uint8",
-        "name": "kind",
-        "type": "uint8"
-      },
-      {
-        "internalType": "uint256",
-        "name": "refId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint8",
-        "name": "action",
-        "type": "uint8"
+        "internalType": "address",
+        "name": "moderation",
+        "type": "address"
       }
     ],
-    "name": "resolveReport",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      }
-    ],
-    "name": "restorePost",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "string",
-        "name": "content",
-        "type": "string"
-      },
-      {
-        "internalType": "string",
-        "name": "imageCid",
-        "type": "string"
-      }
-    ],
-    "name": "submitFlaggedComment",
+    "name": "setModerationContract",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -3179,19 +2122,6 @@
       }
     ],
     "name": "unbanUser",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "postId",
-        "type": "uint256"
-      }
-    ],
-    "name": "unlockPost",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

@@ -49,27 +49,6 @@ dataSources:
         - event: PostVoted(indexed uint256,indexed uint256,indexed address,int8,int256,uint256)
           handler: handlePostVoted
           receipt: true
-        - event: PostHidden(indexed uint256,indexed uint256,indexed address,uint256)
-          handler: handlePostHidden
-          receipt: true
-        - event: PostRestored(indexed uint256,indexed uint256,indexed address,uint256)
-          handler: handlePostRestored
-          receipt: true
-        - event: PostLocked(indexed uint256,indexed uint256,address,uint256)
-          handler: handlePostLocked
-          receipt: true
-        - event: PostUnlocked(indexed uint256,indexed uint256,address,uint256)
-          handler: handlePostUnlocked
-          receipt: true
-        - event: CommentHidden(indexed uint256,indexed uint256,indexed uint256,address,uint256)
-          handler: handleCommentHidden
-          receipt: true
-        - event: ContentReported(indexed uint256,indexed uint256,uint8,address,string,uint256)
-          handler: handleContentReported
-          receipt: true
-        - event: ReportResolved(indexed uint256,indexed uint256,indexed address,uint8,uint8,uint256)
-          handler: handleReportResolved
-          receipt: true
         - event: ModeratorAdded(indexed uint256,indexed address,indexed address,uint256)
           handler: handleModeratorAdded
           receipt: true
@@ -94,6 +73,81 @@ dataSources:
         - event: ActiveModeratorsUpdated(indexed uint256,address,address,uint256)
           handler: handleActiveModeratorsUpdated
           receipt: true
+        - event: UserBanned(indexed uint256,indexed address,indexed address,string,uint256)
+          handler: handleUserBanned
+          receipt: true
+        - event: UserUnbanned(indexed uint256,indexed address,indexed address,uint256)
+          handler: handleUserUnbanned
+          receipt: true
+      file: ./src/mapping.ts
+  - kind: ethereum
+    name: UsernameRegistry
+    network: localhost
+    source:
+      address: '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512'
+      abi: UsernameRegistry
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - User
+        - Activity
+      abis:
+        - name: UsernameRegistry
+          file: ./abis/UsernameRegistry.json
+      eventHandlers:
+        - event: UsernameRegistered(indexed address,string,uint256)
+          handler: handleUsernameRegistered
+          receipt: true
+        - event: UsernameChanged(indexed address,string,string,uint256)
+          handler: handleUsernameChanged
+          receipt: true
+      file: ./src/mapping.ts
+  - kind: ethereum
+    name: ForumModeration
+    network: localhost
+    source:
+      address: '0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0'
+      abi: ForumModeration
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - User
+        - Community
+        - Post
+        - Comment
+        - PendingComment
+        - Report
+        - ReportThread
+        - Activity
+        - Notification
+      abis:
+        - name: ForumModeration
+          file: ./abis/ForumModeration.json
+      eventHandlers:
+        - event: PostHidden(indexed uint256,indexed uint256,indexed address,uint256)
+          handler: handlePostHidden
+          receipt: true
+        - event: PostRestored(indexed uint256,indexed uint256,indexed address,uint256)
+          handler: handlePostRestored
+          receipt: true
+        - event: PostLocked(indexed uint256,indexed uint256,address,uint256)
+          handler: handlePostLocked
+          receipt: true
+        - event: PostUnlocked(indexed uint256,indexed uint256,address,uint256)
+          handler: handlePostUnlocked
+          receipt: true
+        - event: CommentHidden(indexed uint256,indexed uint256,indexed uint256,address,uint256)
+          handler: handleCommentHidden
+          receipt: true
+        - event: ContentReported(indexed uint256,indexed uint256,uint8,address,string,uint256)
+          handler: handleContentReported
+          receipt: true
         - event: PostSubmittedForReview(indexed uint256,indexed uint256,indexed address,string,uint256)
           handler: handlePostSubmittedForReview
           receipt: true
@@ -115,16 +169,7 @@ dataSources:
         - event: PendingCommentRejected(indexed uint256,indexed uint256,indexed uint256,address,uint256)
           handler: handlePendingCommentRejected
           receipt: true
-        - event: UsernameRegistered(indexed address,string,uint256)
-          handler: handleUsernameRegistered
-          receipt: true
-        - event: UsernameChanged(indexed address,string,string,uint256)
-          handler: handleUsernameChanged
-          receipt: true
-        - event: UserBanned(indexed uint256,indexed address,indexed address,string,uint256)
-          handler: handleUserBanned
-          receipt: true
-        - event: UserUnbanned(indexed uint256,indexed address,indexed address,uint256)
-          handler: handleUserUnbanned
+        - event: ReportResolved(indexed uint256,indexed uint256,indexed address,uint8,uint8,uint256)
+          handler: handleReportResolved
           receipt: true
       file: ./src/mapping.ts

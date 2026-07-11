@@ -1,12 +1,36 @@
 {
   "31337": {
-    "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
-    "startBlock": 0,
-    "network": "localhost"
+    "network": "localhost",
+    "contracts": {
+      "DecentralizedForum": {
+        "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+        "startBlock": 0
+      },
+      "UsernameRegistry": {
+        "address": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+        "startBlock": 0
+      },
+      "ForumModeration": {
+        "address": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+        "startBlock": 0
+      }
+    }
   },
   "11155111": {
-    "address": "0x49eEDCBdd425Df634A3c11405eE139f446d6141a",
-    "startBlock": 11216989,
-    "network": "sepolia"
+    "network": "sepolia",
+    "contracts": {
+      "DecentralizedForum": {
+        "address": "0x021cc657D6B63c6B23bED4cf9A7d9a2457f0f29E",
+        "startBlock": 11244720
+      },
+      "UsernameRegistry": {
+        "address": "0x63d5b97665F27eaf7Ffa4B97ef851c4daA41d92A",
+        "startBlock": 11244732
+      },
+      "ForumModeration": {
+        "address": "0xb3C16C2196f466D86e4D9400538dB6A3f4950eCF",
+        "startBlock": 11244737
+      }
+    }
   }
 }

@@ -1,6 +1,9 @@
 {
   "chainId": 11155111,
   "network": "sepolia",
-  "address": "0x49eEDCBdd425Df634A3c11405eE139f446d6141a",
-  "startBlock": 11216989
+  "contracts": {
+    "DecentralizedForum": { "address": "0x021cc657D6B63c6B23bED4cf9A7d9a2457f0f29E", "startBlock": 11244720 },
+    "UsernameRegistry": { "address": "0x63d5b97665F27eaf7Ffa4B97ef851c4daA41d92A", "startBlock": 11244732 },
+    "ForumModeration": { "address": "0xb3C16C2196f466D86e4D9400538dB6A3f4950eCF", "startBlock": 11244737 }
+  }
 }

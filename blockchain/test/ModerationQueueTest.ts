@@ -18,11 +18,22 @@ describe("DecentralizedForum moderation queue", function () {
     return forum;
   }
 
-  async function forumWithCommunity() {
+  // Deploys the forum + moderation pair and wires them exactly like the
+  // Ignition module does: ForumModeration takes the forum's address at
+  // construction, then the forum is told the moderation address once.
+  async function deployModerationSuite() {
     const forum = await deployForum();
+    const moderation = await ethers.deployContract("ForumModeration", [await forum.getAddress()]);
+    await moderation.waitForDeployment();
+    await forum.setModerationContract(await moderation.getAddress());
+    return { forum, moderation };
+  }
+
+  async function suiteWithCommunity() {
+    const { forum, moderation } = await deployModerationSuite();
     await forum.createCommunity("blockchain", "cid-community", "a community");
     await forum.connect(user1).joinCommunity(1n);
-    return forum;
+    return { forum, moderation };
   }
 
   describe("community name validation", function () {
@@ -48,59 +59,89 @@ describe("DecentralizedForum moderation queue", function () {
     });
   });
 
+  describe("forum <-> moderation wiring", function () {
+    it("rejects a flagged post before the moderation contract is wired", async function () {
+      const forum = await deployForum();
+      await forum.createCommunity("blockchain", "cid-community", "a community");
+      await forum.connect(user1).joinCommunity(1n);
+
+      await expect(forum.connect(user1).createFlaggedPost(1n, "cid-post", "title", ""))
+        .to.be.revertedWithCustomError(forum, "ModerationContractNotSet");
+    });
+
+    it("only the deployer can wire the moderation contract, and only once", async function () {
+      const forum = await deployForum();
+      const moderation = await ethers.deployContract("ForumModeration", [await forum.getAddress()]);
+
+      await expect(forum.connect(user1).setModerationContract(await moderation.getAddress()))
+        .to.be.revertedWithCustomError(forum, "OnlyDeployerAllowed");
+
+      await forum.setModerationContract(await moderation.getAddress());
+      await expect(forum.setModerationContract(await moderation.getAddress()))
+        .to.be.revertedWithCustomError(forum, "ModerationContractAlreadySet");
+    });
+
+    it("rejects awardPostApprovalActivity from anyone but the wired moderation contract", async function () {
+      const { forum } = await deployModerationSuite();
+      await forum.createCommunity("blockchain", "cid-community", "a community");
+
+      await expect(forum.connect(user1).awardPostApprovalActivity(1n, user1.address))
+        .to.be.revertedWithCustomError(forum, "OnlyModerationContractAllowed");
+    });
+  });
+
   describe("flagged posts", function () {
     it("stores a flagged post as hidden and pending, without activity points", async function () {
-      const forum = await forumWithCommunity();
+      const { forum, moderation } = await suiteWithCommunity();
 
       await forum.connect(user1).createFlaggedPost(1n, "cid-post", "flagged title", "");
 
-      expect(await forum.postPendingReview(1n)).to.equal(true);
-      expect(await forum.isPostHidden(1n)).to.equal(true);
+      expect(await moderation.postPendingReview(1n)).to.equal(true);
+      expect(await moderation.postHidden(1n)).to.equal(true); // not publicly visible until approved
       expect(await forum.activityScore(1n, user1.address)).to.equal(0n);
     });
 
     it("approval publishes the post and grants activity points", async function () {
-      const forum = await forumWithCommunity();
+      const { forum, moderation } = await suiteWithCommunity();
       await forum.connect(user1).createFlaggedPost(1n, "cid-post", "flagged title", "");
 
-      await expect(forum.approvePendingPost(1n)).to.emit(forum, "PendingPostApproved");
+      await expect(moderation.approvePendingPost(1n)).to.emit(moderation, "PendingPostApproved");
 
-      expect(await forum.postPendingReview(1n)).to.equal(false);
-      expect(await forum.isPostHidden(1n)).to.equal(false);
-      expect(await forum.postRejected(1n)).to.equal(false);
+      expect(await moderation.postPendingReview(1n)).to.equal(false);
+      expect(await moderation.postHidden(1n)).to.equal(false); // un-hidden on approval
+      expect(await moderation.postRejected(1n)).to.equal(false);
       expect(await forum.activityScore(1n, user1.address)).to.equal(await forum.POST_ACTIVITY_POINTS());
     });
 
-    it("rejection keeps the post hidden and marks it rejected", async function () {
-      const forum = await forumWithCommunity();
+    it("rejection marks the post rejected without activity points", async function () {
+      const { forum, moderation } = await suiteWithCommunity();
       await forum.connect(user1).createFlaggedPost(1n, "cid-post", "flagged title", "");
 
-      await expect(forum.rejectPendingPost(1n)).to.emit(forum, "PendingPostRejected");
+      await expect(moderation.rejectPendingPost(1n)).to.emit(moderation, "PendingPostRejected");
 
-      expect(await forum.postRejected(1n)).to.equal(true);
-      expect(await forum.isPostHidden(1n)).to.equal(true);
+      expect(await moderation.postRejected(1n)).to.equal(true);
       expect(await forum.activityScore(1n, user1.address)).to.equal(0n);
     });
 
     it("only one moderator decision counts, and only moderators can decide", async function () {
-      const forum = await forumWithCommunity();
+      const { forum, moderation } = await suiteWithCommunity();
       await forum.connect(user1).createFlaggedPost(1n, "cid-post", "flagged title", "");
 
-      await expect(forum.connect(user1).approvePendingPost(1n))
-        .to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
+      await expect(moderation.connect(user1).approvePendingPost(1n))
+        .to.be.revertedWithCustomError(moderation, "OnlyCommunityModeratorAllowed");
 
-      await forum.approvePendingPost(1n);
-      await expect(forum.rejectPendingPost(1n))
-        .to.be.revertedWithCustomError(forum, "PostNotPendingReview");
+      await moderation.approvePendingPost(1n);
+      await expect(moderation.rejectPendingPost(1n))
+        .to.be.revertedWithCustomError(moderation, "PostNotPendingReview");
     });
 
     it("does not treat normal posts as pending", async function () {
-      const forum = await forumWithCommunity();
+      const { forum, moderation } = await suiteWithCommunity();
       await forum.connect(user1).createPost(1n, "cid-post", "clean title", "");
 
-      expect(await forum.postPendingReview(1n)).to.equal(false);
-      await expect(forum.approvePendingPost(1n))
-        .to.be.revertedWithCustomError(forum, "PostNotPendingReview");
+      expect(await moderation.postPendingReview(1n)).to.equal(false);
+      await expect(moderation.approvePendingPost(1n))
+        .to.be.revertedWithCustomError(moderation, "PostNotPendingReview");
     });
   });
 
@@ -108,22 +149,22 @@ describe("DecentralizedForum moderation queue", function () {
     // The post is authored by the owner: a member who publishes a post earns
     // activity points and can become an automatic Active Moderator, which
     // would break the "non-moderator" assertions below.
-    async function forumWithPost() {
-      const forum = await forumWithCommunity();
+    async function suiteWithPost() {
+      const { forum, moderation } = await suiteWithCommunity();
       await forum.createPost(1n, "cid-post", "a post", "");
-      return forum;
+      return { forum, moderation };
     }
 
     it("stores a pending comment and exposes it through views", async function () {
-      const forum = await forumWithPost();
+      const { moderation } = await suiteWithPost();
 
-      await expect(forum.connect(user1).submitFlaggedComment(1n, "bad words here", "img-cid"))
-        .to.emit(forum, "CommentSubmittedForReview");
+      await expect(moderation.connect(user1).submitFlaggedComment(1n, "bad words here", "img-cid"))
+        .to.emit(moderation, "CommentSubmittedForReview");
 
-      const ids = await forum.getPendingCommentsByPost(1n);
+      const ids = await moderation.getPendingCommentsByPost(1n);
       expect(ids.length).to.equal(1);
 
-      const comment = await forum.getPendingComment(ids[0]);
+      const comment = await moderation.getPendingComment(ids[0]);
       expect(comment[2]).to.equal(user1.address);
       expect(comment[3]).to.equal("bad words here");
       expect(comment[4]).to.equal("img-cid");
@@ -131,52 +172,52 @@ describe("DecentralizedForum moderation queue", function () {
     });
 
     it("approve and reject update status once, moderators only", async function () {
-      const forum = await forumWithPost();
-      await forum.connect(user1).submitFlaggedComment(1n, "first", "");
-      await forum.connect(user1).submitFlaggedComment(1n, "second", "");
+      const { moderation } = await suiteWithPost();
+      await moderation.connect(user1).submitFlaggedComment(1n, "first", "");
+      await moderation.connect(user1).submitFlaggedComment(1n, "second", "");
 
-      await expect(forum.connect(user1).approvePendingComment(1n))
-        .to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
+      await expect(moderation.connect(user1).approvePendingComment(1n))
+        .to.be.revertedWithCustomError(moderation, "OnlyCommunityModeratorAllowed");
 
-      await forum.approvePendingComment(1n);
-      expect((await forum.getPendingComment(1n))[6]).to.equal(1);
+      await moderation.approvePendingComment(1n);
+      expect((await moderation.getPendingComment(1n))[6]).to.equal(1);
 
-      await forum.rejectPendingComment(2n);
-      expect((await forum.getPendingComment(2n))[6]).to.equal(2);
+      await moderation.rejectPendingComment(2n);
+      expect((await moderation.getPendingComment(2n))[6]).to.equal(2);
 
-      await expect(forum.approvePendingComment(1n))
-        .to.be.revertedWithCustomError(forum, "CommentNotPendingReview");
+      await expect(moderation.approvePendingComment(1n))
+        .to.be.revertedWithCustomError(moderation, "CommentNotPendingReview");
     });
 
     it("requires membership, no ban, and non-empty content", async function () {
-      const forum = await forumWithPost();
+      const { forum, moderation } = await suiteWithPost();
 
-      await expect(forum.connect(user2).submitFlaggedComment(1n, "hello", ""))
-        .to.be.revertedWithCustomError(forum, "OnlyCommunityMembersAllowed");
+      await expect(moderation.connect(user2).submitFlaggedComment(1n, "hello", ""))
+        .to.be.revertedWithCustomError(moderation, "OnlyCommunityMembersAllowed");
 
-      await expect(forum.connect(user1).submitFlaggedComment(1n, "", ""))
-        .to.be.revertedWithCustomError(forum, "EmptyCommentContent");
+      await expect(moderation.connect(user1).submitFlaggedComment(1n, "", ""))
+        .to.be.revertedWithCustomError(moderation, "EmptyCommentContent");
 
       await forum.banUser(1n, user1.address, "spam");
-      await expect(forum.connect(user1).submitFlaggedComment(1n, "hello", ""))
-        .to.be.revertedWithCustomError(forum, "UserBannedFromCommunity");
+      await expect(moderation.connect(user1).submitFlaggedComment(1n, "hello", ""))
+        .to.be.revertedWithCustomError(moderation, "UserBannedFromCommunity");
     });
   });
 
   describe("clean on-chain comments (addComment)", function () {
-    async function forumWithPost() {
-      const forum = await forumWithCommunity();
+    async function suiteWithPost() {
+      const { forum, moderation } = await suiteWithCommunity();
       await forum.createPost(1n, "cid-post", "a post", "");
-      return forum;
+      return { forum, moderation };
     }
 
     it("emits CommentCreated for a member's comment", async function () {
-      const forum = await forumWithPost();
+      const { moderation } = await suiteWithPost();
 
-      const tx = await forum.connect(user1).addComment(1n, "great post!", "img-cid");
+      const tx = await moderation.connect(user1).addComment(1n, "great post!", "img-cid");
       const receipt = await tx.wait();
       const event = receipt.logs
-        .map((log: any) => { try { return forum.interface.parseLog(log); } catch { return null; } })
+        .map((log: any) => { try { return moderation.interface.parseLog(log); } catch { return null; } })
         .find((parsed: any) => parsed && parsed.name === "CommentCreated");
 
       expect(event, "CommentCreated not emitted").to.not.equal(undefined);
@@ -189,115 +230,158 @@ describe("DecentralizedForum moderation queue", function () {
     });
 
     it("assigns incrementing comment ids", async function () {
-      const forum = await forumWithPost();
-      await forum.connect(user1).addComment(1n, "first", "");
-      const tx = await forum.connect(user1).addComment(1n, "second", "");
+      const { moderation } = await suiteWithPost();
+      await moderation.connect(user1).addComment(1n, "first", "");
+      const tx = await moderation.connect(user1).addComment(1n, "second", "");
       const receipt = await tx.wait();
       const event = receipt.logs
-        .map((log: any) => { try { return forum.interface.parseLog(log); } catch { return null; } })
+        .map((log: any) => { try { return moderation.interface.parseLog(log); } catch { return null; } })
         .find((parsed: any) => parsed && parsed.name === "CommentCreated");
       expect(event.args[0]).to.equal(2n);
     });
 
     it("requires an existing post, membership, no ban, and non-empty content", async function () {
-      const forum = await forumWithPost();
+      const { forum, moderation } = await suiteWithPost();
 
-      await expect(forum.connect(user1).addComment(99n, "hello", ""))
+      await expect(moderation.connect(user1).addComment(99n, "hello", ""))
         .to.be.revertedWithCustomError(forum, "PostDoesNotExist");
 
-      await expect(forum.connect(user2).addComment(1n, "hello", ""))
-        .to.be.revertedWithCustomError(forum, "OnlyCommunityMembersAllowed");
+      await expect(moderation.connect(user2).addComment(1n, "hello", ""))
+        .to.be.revertedWithCustomError(moderation, "OnlyCommunityMembersAllowed");
 
-      await expect(forum.connect(user1).addComment(1n, "", ""))
-        .to.be.revertedWithCustomError(forum, "EmptyCommentContent");
+      await expect(moderation.connect(user1).addComment(1n, "", ""))
+        .to.be.revertedWithCustomError(moderation, "EmptyCommentContent");
 
       await forum.banUser(1n, user1.address, "spam");
-      await expect(forum.connect(user1).addComment(1n, "hello", ""))
-        .to.be.revertedWithCustomError(forum, "UserBannedFromCommunity");
+      await expect(moderation.connect(user1).addComment(1n, "hello", ""))
+        .to.be.revertedWithCustomError(moderation, "UserBannedFromCommunity");
+    });
+  });
+
+  describe("post hide/restore", function () {
+    async function suiteWithPost() {
+      const { forum, moderation } = await suiteWithCommunity();
+      await forum.createPost(1n, "cid-post", "a post", "");
+      return { forum, moderation };
+    }
+
+    it("a moderator can hide and restore a post", async function () {
+      const { moderation } = await suiteWithPost();
+
+      await expect(moderation.hidePost(1n)).to.emit(moderation, "PostHidden");
+      expect(await moderation.postHidden(1n)).to.equal(true);
+
+      await expect(moderation.restorePost(1n)).to.emit(moderation, "PostRestored");
+      expect(await moderation.postHidden(1n)).to.equal(false);
+    });
+
+    it("only moderators can hide; double hide and restore-of-visible revert", async function () {
+      const { moderation } = await suiteWithPost();
+
+      await expect(moderation.connect(user1).hidePost(1n))
+        .to.be.revertedWithCustomError(moderation, "OnlyCommunityModeratorAllowed");
+      await expect(moderation.restorePost(1n))
+        .to.be.revertedWithCustomError(moderation, "PostNotHidden");
+
+      await moderation.hidePost(1n);
+      await expect(moderation.hidePost(1n))
+        .to.be.revertedWithCustomError(moderation, "PostAlreadyHidden");
+    });
+
+    it("cannot restore a post still pending or already rejected review", async function () {
+      const { forum, moderation } = await suiteWithCommunity();
+      await forum.connect(user1).createFlaggedPost(1n, "cid-p", "t", ""); // hidden + pending
+
+      await expect(moderation.restorePost(1n))
+        .to.be.revertedWithCustomError(moderation, "CannotRestoreModeratedPost");
+
+      await moderation.rejectPendingPost(1n); // stays hidden + now rejected
+      await expect(moderation.restorePost(1n))
+        .to.be.revertedWithCustomError(moderation, "CannotRestoreModeratedPost");
     });
   });
 
   describe("post locking", function () {
-    async function forumWithPost() {
-      const forum = await forumWithCommunity();
+    async function suiteWithPost() {
+      const { forum, moderation } = await suiteWithCommunity();
       await forum.createPost(1n, "cid-post", "a post", "");
-      return forum;
+      return { forum, moderation };
     }
 
     it("lock blocks new clean and flagged comments; unlock restores them", async function () {
-      const forum = await forumWithPost();
+      const { moderation } = await suiteWithPost();
 
-      await expect(forum.lockPost(1n)).to.emit(forum, "PostLocked");
-      expect(await forum.postLocked(1n)).to.equal(true);
+      await expect(moderation.lockPost(1n)).to.emit(moderation, "PostLocked");
+      expect(await moderation.postLocked(1n)).to.equal(true);
 
-      await expect(forum.connect(user1).addComment(1n, "too late", ""))
-        .to.be.revertedWithCustomError(forum, "PostIsLocked");
-      await expect(forum.connect(user1).submitFlaggedComment(1n, "too late", ""))
-        .to.be.revertedWithCustomError(forum, "PostIsLocked");
+      await expect(moderation.connect(user1).addComment(1n, "too late", ""))
+        .to.be.revertedWithCustomError(moderation, "PostIsLocked");
+      await expect(moderation.connect(user1).submitFlaggedComment(1n, "too late", ""))
+        .to.be.revertedWithCustomError(moderation, "PostIsLocked");
 
-      await expect(forum.unlockPost(1n)).to.emit(forum, "PostUnlocked");
-      await forum.connect(user1).addComment(1n, "open again", "");
+      await expect(moderation.unlockPost(1n)).to.emit(moderation, "PostUnlocked");
+      await moderation.connect(user1).addComment(1n, "open again", "");
     });
 
     it("only moderators can lock/unlock; double lock and unlock of unlocked revert", async function () {
-      const forum = await forumWithPost();
+      const { moderation } = await suiteWithPost();
 
-      await expect(forum.connect(user1).lockPost(1n))
-        .to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
-      await expect(forum.unlockPost(1n))
-        .to.be.revertedWithCustomError(forum, "PostNotLocked");
+      await expect(moderation.connect(user1).lockPost(1n))
+        .to.be.revertedWithCustomError(moderation, "OnlyCommunityModeratorAllowed");
+      await expect(moderation.unlockPost(1n))
+        .to.be.revertedWithCustomError(moderation, "PostNotLocked");
 
-      await forum.lockPost(1n);
-      await expect(forum.lockPost(1n))
-        .to.be.revertedWithCustomError(forum, "PostAlreadyLocked");
+      await moderation.lockPost(1n);
+      await expect(moderation.lockPost(1n))
+        .to.be.revertedWithCustomError(moderation, "PostAlreadyLocked");
     });
   });
 
   describe("comment hiding", function () {
-    async function forumWithComment() {
-      const forum = await forumWithCommunity();
+    async function suiteWithComment() {
+      const { forum, moderation } = await suiteWithCommunity();
       await forum.createPost(1n, "cid-post", "a post", "");
-      await forum.connect(user1).addComment(1n, "a comment", "");
-      return forum;
+      await moderation.connect(user1).addComment(1n, "a comment", "");
+      return { forum, moderation };
     }
 
     it("a moderator of the comment's community can hide it exactly once", async function () {
-      const forum = await forumWithComment();
+      const { moderation } = await suiteWithComment();
 
-      await expect(forum.hideComment(1n)).to.emit(forum, "CommentHidden");
-      expect(await forum.commentHidden(1n)).to.equal(true);
+      await expect(moderation.hideComment(1n)).to.emit(moderation, "CommentHidden");
+      expect(await moderation.commentHidden(1n)).to.equal(true);
 
-      await expect(forum.hideComment(1n))
-        .to.be.revertedWithCustomError(forum, "CommentAlreadyHidden");
+      await expect(moderation.hideComment(1n))
+        .to.be.revertedWithCustomError(moderation, "CommentAlreadyHidden");
     });
 
     it("rejects non-moderators and unknown comment ids", async function () {
-      const forum = await forumWithComment();
+      const { moderation } = await suiteWithComment();
 
-      await expect(forum.connect(user1).hideComment(1n))
-        .to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
-      await expect(forum.hideComment(99n))
-        .to.be.revertedWithCustomError(forum, "CommentDoesNotExist");
+      await expect(moderation.connect(user1).hideComment(1n))
+        .to.be.revertedWithCustomError(moderation, "OnlyCommunityModeratorAllowed");
+      await expect(moderation.hideComment(99n))
+        .to.be.revertedWithCustomError(moderation, "CommentDoesNotExist");
     });
   });
 
   describe("content reports", function () {
-    async function forumWithComment() {
-      const forum = await forumWithCommunity();
+    async function suiteWithComment() {
+      const { forum, moderation } = await suiteWithCommunity();
       await forum.createPost(1n, "cid-post", "a post", "");
-      await forum.connect(user1).addComment(1n, "a comment", "");
+      await moderation.connect(user1).addComment(1n, "a comment", "");
       // Reporters must belong to some community (anti-spam gate).
       await forum.connect(user2).joinCommunity(1n);
-      return forum;
+      return { forum, moderation };
     }
 
     it("a member can report a post, emitting ContentReported with kind 0", async function () {
-      const forum = await forumWithComment();
+      const { moderation } = await suiteWithComment();
 
-      const tx = await forum.connect(user2).reportPost(1n, "spam");
+      const tx = await moderation.connect(user2).reportPost(1n, "spam");
       const receipt = await tx.wait();
       const event = receipt.logs
-        .map((log: any) => { try { return forum.interface.parseLog(log); } catch { return null; } })
+        .map((log: any) => { try { return moderation.interface.parseLog(log); } catch { return null; } })
         .find((parsed: any) => parsed && parsed.name === "ContentReported");
 
       expect(event, "ContentReported not emitted").to.not.equal(undefined);
@@ -309,19 +393,66 @@ describe("DecentralizedForum moderation queue", function () {
     });
 
     it("reports a comment with kind 1, and rejects unknown comment ids", async function () {
-      const forum = await forumWithComment();
+      const { moderation } = await suiteWithComment();
 
-      await expect(forum.connect(user2).reportComment(1n, "offensive"))
-        .to.emit(forum, "ContentReported");
+      await expect(moderation.connect(user2).reportComment(1n, "offensive"))
+        .to.emit(moderation, "ContentReported");
 
-      await expect(forum.reportComment(99n, "x"))
-        .to.be.revertedWithCustomError(forum, "CommentDoesNotExist");
+      await expect(moderation.reportComment(99n, "x"))
+        .to.be.revertedWithCustomError(moderation, "CommentDoesNotExist");
     });
 
     it("rejects reporting a non-existent post", async function () {
-      const forum = await forumWithComment();
-      await expect(forum.reportPost(99n, "x"))
+      const { forum, moderation } = await suiteWithComment();
+      await expect(moderation.reportPost(99n, "x"))
         .to.be.revertedWithCustomError(forum, "PostDoesNotExist");
     });
+
+    it("rejects a reporter who hasn't joined any community", async function () {
+      const { forum, moderation } = await suiteWithCommunity();
+      await forum.createPost(1n, "cid-post", "a post", "");
+      // A fresh signer that never joined anything (not even user2, who is
+      // joined by suiteWithComment - use a plain suite to keep this isolated).
+      const [, , , outsider] = await ethers.getSigners();
+      await expect(moderation.connect(outsider).reportPost(1n, "spam"))
+        .to.be.revertedWithCustomError(moderation, "MustJoinCommunityFirst");
+    });
+
+    it("rejects the same reporter reporting the same content twice", async function () {
+      const { moderation } = await suiteWithComment();
+
+      await moderation.connect(user2).reportPost(1n, "spam");
+      await expect(moderation.connect(user2).reportPost(1n, "spam again"))
+        .to.be.revertedWithCustomError(moderation, "AlreadyReported");
+
+      // A different piece of content, or a different reporter, is unaffected.
+      await expect(moderation.connect(user2).reportComment(1n, "also bad"))
+        .to.emit(moderation, "ContentReported");
+      await expect(moderation.reportPost(1n, "seconded")).to.emit(moderation, "ContentReported");
+    });
+
+    it("lets a moderator resolve a report, emitting ReportResolved", async function () {
+      const { moderation } = await suiteWithComment();
+      await moderation.connect(user2).reportPost(1n, "spam");
+
+      const tx = await moderation.resolveReport(0, 1n, 1);
+      const receipt = await tx.wait();
+      const event = receipt.logs
+        .map((log: any) => { try { return moderation.interface.parseLog(log); } catch { return null; } })
+        .find((parsed: any) => parsed && parsed.name === "ReportResolved");
+
+      expect(event, "ReportResolved not emitted").to.not.equal(undefined);
+      expect(event.args[0]).to.equal(1n); // communityId
+      expect(event.args[1]).to.equal(1n); // refId (postId)
+      expect(event.args[2]).to.equal(owner.address); // resolvedBy
+      expect(event.args[3]).to.equal(0n); // kind = post
+      expect(event.args[4]).to.equal(1n); // action = action taken
+
+      await expect(moderation.connect(user1).resolveReport(0, 1n, 0))
+        .to.be.revertedWithCustomError(moderation, "OnlyCommunityModeratorAllowed");
+    });
   });
+
+  // The comments-Merkle-root checkpoint was removed entirely (dead code -
+  // never used by the frontend, and cutting it recovers bytecode headroom).
 });
