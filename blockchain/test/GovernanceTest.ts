@@ -212,11 +212,6 @@ describe("DecentralizedForum governance upgrade", function () {
     expect(proposals.map((id: bigint) => id)).to.deep.equal([1n]);
   });
 
-  it("resolves usernames to addresses", async function () {
-    const forum = await deployForum();
-
-    await forum.connect(user1).registerUsername("satoshi_99");
-    expect(await forum.getAddressByUsername("satoshi_99")).to.equal(user1.address);
-    expect(await forum.getAddressByUsername("nobody")).to.equal(ethers.ZeroAddress);
-  });
+  // Username registration/lookup now lives on the standalone UsernameRegistry
+  // contract - see UsernameAndVotesTest.ts.
 });

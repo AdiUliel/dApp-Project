@@ -1,13 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ethers } from 'ethers'
 import contractArtifact from './DecentralizedForum.json'
-import { addJson, addFile, getJson, ipfsUrl } from './ipfs'
-import Modal from './Modal'
-import { Composer, renderRichText } from './Composer'
-import { validateUsername, isValidCommunityName } from './usernamePolicy'
-import { checkContentSafety } from './contentSafety'
-import { loadLanguage, makeTranslator, LANGUAGE_STORAGE_KEY, type Language, type TranslationKey } from './i18n'
-import { contractAddressForChain, NETWORK_NAMES } from './config'
+import usernameRegistryArtifact from './UsernameRegistry.json'
+import moderationArtifact from './ForumModeration.json'
+import { addJson, addFile, getJson, ipfsUrl } from '@/services/ipfs'
+import Modal from '@/components/Modal'
+import { Composer, renderRichText } from '@/components/Composer'
+import { validateUsername, isValidCommunityName } from '@/lib/usernamePolicy'
+import { checkContentSafety } from '@/lib/contentSafety'
+import { loadLanguage, makeTranslator, LANGUAGE_STORAGE_KEY, type Language, type TranslationKey } from '@/lib/i18n'
+import {
+  contractAddressForChain,
+  usernameRegistryAddressForChain,
+  moderationAddressForChain,
+  NETWORK_NAMES,
+} from '@/lib/config'
 import {
   fetchApprovedComments,
   fetchComments,
@@ -28,13 +35,32 @@ import {
   type GraphPost,
   type GraphReport,
   type GraphUser,
-} from './graph'
+} from '@/services/graph'
+import { useWallet } from '@/features/wallet/useWallet'
+import { WalletConnectButton, WalletLandingCard } from '@/features/wallet/WalletConnectButton'
 import './App.css'
 
 const COMMENTS_STORAGE_KEY = 'reppit_signed_comments_v1'
 const READ_NOTIFICATIONS_KEY = 'reppit_read_notifications_v1'
 const HIDDEN_POSTS_KEY = 'reppit_hidden_posts_v1'
-const USERNAME_CHANGE_FEE_ETH = '0.05'
+
+type ContractName = 'forum' | 'usernameRegistry' | 'moderation'
+
+const CONTRACT_ABIS: Record<ContractName, ethers.InterfaceAbi> = {
+  forum: contractArtifact.abi,
+  usernameRegistry: usernameRegistryArtifact.abi,
+  moderation: moderationArtifact.abi,
+}
+
+// Every custom-error selector across the three contracts, combined into one
+// fragment list - selectors are signature-based (not contract-scoped), so a
+// single Interface built from all three ABIs decodes reverts from any of them.
+// Constructors are dropped: each contract has its own, and Interface only
+// supports one, so keeping them would log a "duplicate definition" warning
+// for a fragment type this list is never used to construct anything from.
+const ALL_ABI_FRAGMENTS = [...contractArtifact.abi, ...usernameRegistryArtifact.abi, ...moderationArtifact.abi].filter(
+  (fragment: { type?: string }) => fragment.type !== 'constructor',
+)
 
 type View = 'home' | 'community' | 'profile' | 'search'
 
@@ -215,7 +241,10 @@ function App() {
     const data = typeof err?.data === 'string' ? err.data : (err?.info?.error?.data as string | undefined)
     if (!name && data && data !== '0x') {
       try {
-        name = new ethers.Interface(contractArtifact.abi).parseError(data)?.name || ''
+        // Custom-error selectors are signature-based, not contract-scoped, so
+        // one Interface built from all three ABIs decodes reverts regardless
+        // of which contract actually threw them.
+        name = new ethers.Interface(ALL_ABI_FRAGMENTS).parseError(data)?.name || ''
       } catch {
         // Unknown selector - fall through to the generic message.
       }
@@ -243,8 +272,10 @@ function App() {
     alert(`${t(key)}\n${describeTxError(error)}`)
   }
 
-  const [walletAddress, setWalletAddress] = useState('')
+  const { walletAddress, getProvider, getCurrentWalletAddress, connect, disconnect } = useWallet()
   const [contractAddress, setContractAddress] = useState('')
+  const [usernameRegistryAddress, setUsernameRegistryAddress] = useState('')
+  const [moderationAddress, setModerationAddress] = useState('')
   const [statusMessage, setStatusMessage] = useState('')
   const [modNotification, setModNotification] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
@@ -256,6 +287,7 @@ function App() {
   const [showChangeUsernameModal, setShowChangeUsernameModal] = useState(false)
   const [usernameInput, setUsernameInput] = useState('')
   const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null)
+  const [changeCooldownRemaining, setChangeCooldownRemaining] = useState(0)
   const [usernamesCache, setUsernamesCache] = useState<Record<string, string>>({})
   const requestedUsernameAddresses = useRef(new Set<string>())
 
@@ -459,17 +491,6 @@ function App() {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, lang)
   }, [lang])
 
-  // Switching networks in MetaMask changes the contract/graph target; a full
-  // reload is the simplest way to re-resolve cleanly.
-  useEffect(() => {
-    const ethereum = window.ethereum as { on?: (e: string, cb: () => void) => void; removeListener?: (e: string, cb: () => void) => void } | undefined
-    if (!ethereum?.on) return
-
-    const onChainChanged = () => window.location.reload()
-    ethereum.on('chainChanged', onChainChanged)
-    return () => ethereum.removeListener?.('chainChanged', onChainChanged)
-  }, [])
-
   useEffect(() => {
     if (walletAddress) {
       loadCommunities(walletAddress, true)
@@ -636,7 +657,7 @@ function App() {
 
     let cancelled = false
     const timeoutId = setTimeout(() => {
-      getContract(false)
+      getContract(false, 'usernameRegistry')
         .then((contract) => contract.isUsernameAvailable(name))
         .then((available: boolean) => {
           if (!cancelled) setUsernameAvailable(available)
@@ -690,25 +711,6 @@ function App() {
     trendingPosts.forEach((post) => fetchIpfsMetadata(post.contentCID))
   }, [trendingPosts])
 
-  const getProvider = () => {
-    if (!window.ethereum) {
-      throw new Error('MetaMask is not installed')
-    }
-
-    return new ethers.BrowserProvider(window.ethereum as ethers.Eip1193Provider)
-  }
-
-  const getCurrentWalletAddress = async () => {
-    const provider = getProvider()
-    const accounts = await provider.send('eth_accounts', [])
-
-    if (!accounts || accounts.length === 0) {
-      return ''
-    }
-
-    return accounts[0]
-  }
-
   const getLiveMembershipStatus = async (communityId: string) => {
     const account = await getCurrentWalletAddress()
 
@@ -725,35 +727,49 @@ function App() {
     return { account, isMember, isBanned }
   }
 
-  const getContract = async (withSigner = false) => {
+  const getContract = async (withSigner = false, contractName: ContractName = 'forum') => {
     const provider = getProvider()
-    const address = contractAddress || (await resolveContractAddress())
+
+    const cached =
+      contractName === 'forum' ? contractAddress :
+      contractName === 'usernameRegistry' ? usernameRegistryAddress :
+      moderationAddress
+
+    const address = cached || (await resolveAddresses())[contractName]
+    const abi = CONTRACT_ABIS[contractName]
 
     if (withSigner) {
       const signer = await provider.getSigner()
-      return new ethers.Contract(address, contractArtifact.abi, signer)
+      return new ethers.Contract(address, abi, signer)
     }
 
-    return new ethers.Contract(address, contractArtifact.abi, provider)
+    return new ethers.Contract(address, abi, provider)
   }
 
-  // Resolves the contract address for the network MetaMask is currently on, and
-  // points the Graph client at the matching endpoint.
-  const resolveContractAddress = async () => {
+  // Resolves all three contract addresses for the network MetaMask is
+  // currently on, caches them in state, and points the Graph client at the
+  // matching endpoint.
+  const resolveAddresses = async () => {
     const provider = getProvider()
     const network = await provider.getNetwork()
     const chainId = Number(network.chainId)
     setGraphEndpoint(chainId)
 
-    const address = contractAddressForChain(chainId)
-    if (!address) {
+    const forum = contractAddressForChain(chainId)
+    if (!forum) {
       const name = NETWORK_NAMES[chainId] || `chain ${chainId}`
       setTemporaryStatus(t('unsupportedNetwork', { network: name }))
       throw new Error(`Unsupported network: ${chainId}`)
     }
 
-    setContractAddress(address)
-    return address
+    const usernameRegistry = usernameRegistryAddressForChain(chainId)
+    const moderation = moderationAddressForChain(chainId)
+
+    setContractAddress(forum)
+    setUsernameRegistryAddress(usernameRegistry)
+    setModerationAddress(moderation)
+
+    return { forum, usernameRegistry, moderation }
   }
 
   const setTemporaryStatus = (message: string) => {
@@ -788,7 +804,7 @@ function App() {
 
     requestedUsernameAddresses.current.add(address)
 
-    getContract(false)
+    getContract(false, 'usernameRegistry')
       .then((contract) => contract.getUsername(address))
       .then((name: string) => {
         if (name) setUsernamesCache((prev) => ({ ...prev, [address]: name }))
@@ -801,7 +817,7 @@ function App() {
 
   const loadUsername = async (account: string) => {
     try {
-      const contract = await getContract(false)
+      const contract = await getContract(false, 'usernameRegistry')
       const name = await contract.getUsername(account)
       setUsername(name)
       setShowUsernameModal(!name)
@@ -845,36 +861,19 @@ function App() {
     }
   }
 
-  const connectWallet = async () => {
+  // walletAddress changing (set inside WalletProvider) already triggers the
+  // loadCommunities/loadUsername effect above, so this just requests
+  // accounts and surfaces a translated error - the unsupported-network case
+  // is already handled by resolveAddresses's own status message the moment
+  // the post-connect load effect calls getContract.
+  const handleConnectWallet = async () => {
     try {
-      const provider = getProvider()
-      const accounts = await provider.send('eth_requestAccounts', [])
-      await resolveContractAddress()
-      setWalletAddress(accounts[0])
-      await loadCommunities(accounts[0], true)
+      await connect()
       setTemporaryStatus(t('walletConnected'))
     } catch (error) {
       console.error('Wallet connection failed:', error)
-      if (String(error).includes('Unsupported network')) return
       alert(t('connectFailed'))
     }
-  }
-
-  // Revokes the site's MetaMask permission so it no longer auto-connects,
-  // then reloads to clear all in-memory state.
-  const disconnectWallet = async () => {
-    try {
-      const ethereum = window.ethereum as
-        | { request?: (args: { method: string; params?: unknown[] }) => Promise<unknown> }
-        | undefined
-      await ethereum?.request?.({
-        method: 'wallet_revokePermissions',
-        params: [{ eth_accounts: {} }],
-      })
-    } catch {
-      // Older wallets don't support revoke; the reload still drops the session.
-    }
-    window.location.reload()
   }
 
   const submitUsername = async () => {
@@ -887,7 +886,7 @@ function App() {
     }
 
     try {
-      const contract = await getContract(true)
+      const contract = await getContract(true, 'usernameRegistry')
       const tx = await contract.registerUsername(name)
       setTemporaryStatus(t('registering'))
       await tx.wait()
@@ -913,9 +912,8 @@ function App() {
     }
 
     try {
-      const contract = await getContract(true)
-      const fee = await contract.USERNAME_CHANGE_FEE()
-      const tx = await contract.changeUsername(name, { value: fee })
+      const contract = await getContract(true, 'usernameRegistry')
+      const tx = await contract.changeUsername(name)
       setTemporaryStatus(t('changing'))
       await tx.wait()
 
@@ -1085,20 +1083,39 @@ function App() {
   const loadPosts = async (communityId: string) => {
     try {
       const contract = await getContract(false)
+      // Networks without a moderation contract deployed yet (e.g. Sepolia,
+      // still on the pre-split single-contract deployment) resolve this to
+      // an empty address - construction or calls on it will throw, so every
+      // status flag below degrades to "not hidden/pending/rejected/locked"
+      // instead of taking down the whole post list.
+      const moderation = await getContract(false, 'moderation').catch(() => null)
       const postIds = await contract.getPostsByCommunity(communityId)
 
       // Load every post and its status flags in parallel. Previously each post
       // waited for the one before it, so N posts meant N serial round-trips;
-      // now it's a single concurrent batch.
+      // now it's a single concurrent batch. Hidden/pending/rejected/locked all
+      // live on the moderation contract now, so getPost itself only returns
+      // the core fields.
       const loadedPosts: Post[] = await Promise.all(
         postIds.map(async (id: bigint): Promise<Post> => {
-          const [post, pending, rejected, locked] = await Promise.all([
-            contract.getPost(id),
-            contract.postPendingReview(id),
-            contract.postRejected(id),
-            // Older deployments predate postLocked; treat a failed call as unlocked.
-            contract.postLocked(id).catch(() => false),
-          ])
+          const post = await contract.getPost(id)
+          let hidden = false
+          let pending = false
+          let rejected = false
+          let locked = false
+
+          if (moderation) {
+            try {
+              ;[hidden, pending, rejected, locked] = await Promise.all([
+                moderation.postHidden(id),
+                moderation.postPendingReview(id),
+                moderation.postRejected(id),
+                moderation.postLocked(id),
+              ])
+            } catch {
+              // No moderation contract on this network - defaults above stand.
+            }
+          }
 
           return {
             id: post[0].toString(),
@@ -1106,7 +1123,7 @@ function App() {
             author: post[2],
             contentCID: post[3],
             createdAt: post[4].toString(),
-            hidden: post[6],
+            hidden,
             locked: Boolean(locked),
             pending,
             rejected,
@@ -1138,7 +1155,7 @@ function App() {
     setReportReason('')
 
     try {
-      const contract = await getContract(true)
+      const contract = await getContract(true, 'moderation')
       const tx =
         target.kind === 0
           ? await contract.reportPost(target.id, reason)
@@ -1209,7 +1226,7 @@ function App() {
 
     // Chain fallback (no graph): clean comments via event logs, flagged via storage getters.
     try {
-      const contract = await getContract(false)
+      const contract = await getContract(false, 'moderation')
       const provider = getProvider()
       const shown: OnChainComment[] = []
       const pending: OnChainComment[] = []
@@ -1302,6 +1319,9 @@ function App() {
 
     try {
       const contract = await getContract(false)
+      // See loadPosts: on networks with no moderation contract deployed yet,
+      // this resolves to null and every post is treated as visible.
+      const moderation = await getContract(false, 'moderation').catch(() => null)
       const communityIds = await contract.getAllCommunityIds()
       const collected: TrendingPost[] = []
 
@@ -1312,10 +1332,19 @@ function App() {
 
         for (const postId of postIds) {
           const post = await contract.getPost(postId)
-          if (post[6]) continue
 
-          const rejected = await contract.postRejected(postId)
-          if (rejected) continue
+          if (moderation) {
+            try {
+              const [hidden, pending, rejected] = await Promise.all([
+                moderation.postHidden(postId),
+                moderation.postPendingReview(postId),
+                moderation.postRejected(postId),
+              ])
+              if (hidden || pending || rejected) continue
+            } catch {
+              // No moderation contract on this network - treat as visible.
+            }
+          }
 
           const score = await contract.postScore(postId)
 
@@ -1884,7 +1913,7 @@ function App() {
     }
 
     try {
-      const contract = await getContract(false)
+      const contract = await getContract(false, 'usernameRegistry')
       const address = await contract.getAddressByUsername(trimmed)
       if (address && address !== emptyAddress) return address
     } catch (error) {
@@ -2013,7 +2042,7 @@ function App() {
 
   const hidePost = async (postId: string) => {
     try {
-      const contract = await getContract(true)
+      const contract = await getContract(true, 'moderation')
       const tx = await contract.hidePost(postId)
 
       setTemporaryStatus(t('hideSent'))
@@ -2028,7 +2057,7 @@ function App() {
 
   const restorePost = async (postId: string) => {
     try {
-      const contract = await getContract(true)
+      const contract = await getContract(true, 'moderation')
       const tx = await contract.restorePost(postId)
 
       setTemporaryStatus(t('restoreSent'))
@@ -2044,7 +2073,7 @@ function App() {
   // Lock keeps the post visible but blocks new comments; unlock reopens it.
   const setPostLock = async (postId: string, lock: boolean) => {
     try {
-      const contract = await getContract(true)
+      const contract = await getContract(true, 'moderation')
       const tx = lock ? await contract.lockPost(postId) : await contract.unlockPost(postId)
 
       setTemporaryStatus(t('txSent'))
@@ -2062,7 +2091,7 @@ function App() {
   const hideChainComment = async (commentId: string) => {
     const numericId = commentId.replace(/^c-/, '')
     try {
-      const contract = await getContract(true)
+      const contract = await getContract(true, 'moderation')
       const tx = await contract.hideComment(numericId)
 
       setTemporaryStatus(t('txSent'))
@@ -2078,7 +2107,7 @@ function App() {
 
   const decidePendingPost = async (postId: string, approved: boolean) => {
     try {
-      const contract = await getContract(true)
+      const contract = await getContract(true, 'moderation')
       setTemporaryStatus(t('approvingItem'))
       const tx = approved ? await contract.approvePendingPost(postId) : await contract.rejectPendingPost(postId)
       const receipt = await tx.wait()
@@ -2093,7 +2122,7 @@ function App() {
 
   const decidePendingComment = async (commentId: string, approved: boolean) => {
     try {
-      const contract = await getContract(true)
+      const contract = await getContract(true, 'moderation')
       setTemporaryStatus(t('approvingItem'))
       const tx = approved
         ? await contract.approvePendingComment(commentId)
@@ -2126,7 +2155,7 @@ function App() {
     }
 
     try {
-      const contract = await getContract(true)
+      const contract = await getContract(true, 'moderation')
       const tx = await contract.submitFlaggedComment(postId, content, imageCid)
       const receipt = await tx.wait()
 
@@ -2188,7 +2217,7 @@ function App() {
     }
 
     try {
-      const contract = await getContract(true)
+      const contract = await getContract(true, 'moderation')
       const tx = await contract.addComment(postId, content, imageCid)
 
       const account = liveStatus.account
@@ -3181,10 +3210,15 @@ function App() {
                 className="ghost-button"
                 onClick={() => {
                   setUsernameInput('')
+                  setChangeCooldownRemaining(0)
                   setShowChangeUsernameModal(true)
+                  getContract(false, 'usernameRegistry')
+                    .then((contract) => contract.getCooldownRemaining(walletAddress))
+                    .then((remaining: bigint) => setChangeCooldownRemaining(Number(remaining)))
+                    .catch(() => setChangeCooldownRemaining(0))
                 }}
               >
-                {t('changeUsernameButton', { fee: USERNAME_CHANGE_FEE_ETH })}
+                {t('changeUsernameButton')}
               </button>
             )}
           </div>
@@ -3318,22 +3352,15 @@ function App() {
             </button>
           )}
 
-          <div className="wallet-panel">
-            {walletAddress ? (
-              <>
-                <span className="status-dot" />
-                <span className="wallet-label">{t('connected')}</span>
-                <code>{formatAddress(walletAddress)}</code>
-                <button className="ghost-button disconnect-button" onClick={disconnectWallet}>
-                  {t('disconnect')}
-                </button>
-              </>
-            ) : (
-              <button className="primary-button" onClick={connectWallet}>
-                {t('connectWallet')}
-              </button>
-            )}
-          </div>
+          <WalletConnectButton
+            connected={Boolean(walletAddress)}
+            formattedAddress={formatAddress(walletAddress)}
+            connectedLabel={t('connected')}
+            connectLabel={t('connectWallet')}
+            disconnectLabel={t('disconnect')}
+            onConnect={handleConnectWallet}
+            onDisconnect={disconnect}
+          />
         </div>
       </header>
 
@@ -3341,14 +3368,13 @@ function App() {
       {statusMessage && <div className="toast-message">{statusMessage}</div>}
 
       {!walletAddress ? (
-        <main className="landing-card">
-          <span className="eyebrow">{t('landingEyebrow')}</span>
-          <h2>{t('landingTitle')}</h2>
-          <p>{t('landingBody')}</p>
-          <button className="primary-button large" onClick={connectWallet}>
-            {t('connectWithMetaMask')}
-          </button>
-        </main>
+        <WalletLandingCard
+          eyebrow={t('landingEyebrow')}
+          title={t('landingTitle')}
+          body={t('landingBody')}
+          buttonLabel={t('connectWithMetaMask')}
+          onConnect={handleConnectWallet}
+        />
       ) : (
         <>
           {view === 'search' && renderSearchView()}
@@ -3499,7 +3525,12 @@ function App() {
                 setUsernameInput('')
               }}
             >
-              <p>{t('changeUsernameBody', { fee: USERNAME_CHANGE_FEE_ETH, old: username })}</p>
+              <p>{t('changeUsernameBody', { old: username })}</p>
+              {changeCooldownRemaining > 0 && (
+                <p className="warning-text">
+                  {t('changeCooldownActive', { days: Math.ceil(changeCooldownRemaining / 86400) })}
+                </p>
+              )}
               <input
                 type="text"
                 placeholder={t('newUsernamePh')}
@@ -3514,10 +3545,15 @@ function App() {
               )}
               <button
                 className="primary-button full"
-                disabled={!usernameInput.trim() || Boolean(usernamePolicyError) || usernameAvailable === false}
+                disabled={
+                  !usernameInput.trim() ||
+                  Boolean(usernamePolicyError) ||
+                  usernameAvailable === false ||
+                  changeCooldownRemaining > 0
+                }
                 onClick={submitUsernameChange}
               >
-                {t('payAndChange', { fee: USERNAME_CHANGE_FEE_ETH })}
+                {t('confirmUsernameChange')}
               </button>
             </Modal>
           )}

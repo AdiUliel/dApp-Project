@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
+import { IForumModeration } from "./ForumInterfaces.sol";
+
 contract DecentralizedForum {
     uint256 private nextCommunityId = 1;
     uint256 private nextPostId = 1;
@@ -8,9 +10,15 @@ contract DecentralizedForum {
 
     uint256 public constant POST_ACTIVITY_POINTS = 5;
     uint256 public constant MODERATOR_RECOMMENDATIONS_REQUIRED = 3;
-    uint256 public constant USERNAME_CHANGE_FEE = 0.05 ether;
-    uint256 public constant USERNAME_MIN_LENGTH = 3;
-    uint256 public constant USERNAME_MAX_LENGTH = 20;
+
+    // Set once, right after deploy, to the ForumModeration contract's address.
+    // Only that address may call awardPostApprovalActivity.
+    address public moderationContract;
+    address private immutable deployer;
+
+    constructor() {
+        deployer = msg.sender;
+    }
 
     // STRUCTS //
     struct Community {
@@ -31,7 +39,6 @@ contract DecentralizedForum {
         string contentCID;
         uint256 createdAt;
         bool exists;
-        bool hidden;
     }
 
     struct RemoveModeratorProposal {
@@ -86,45 +93,8 @@ contract DecentralizedForum {
     mapping(address => uint256) public userPostCount;
     mapping(address => uint256) public userCommunityCount;
 
-    // Optional cryptographic checkpoint for off-chain comments.
-    mapping(uint256 => bytes32) private commentsMerkleRootByPost;
-    mapping(uint256 => uint256) private commentsMerkleRootUpdatedAt;
-
-    mapping(address => string) private usernames;
-    mapping(bytes32 => bool) private usernameExists;
-    mapping(bytes32 => address) private usernameOwner;
-
     mapping(uint256 => mapping(address => int8)) public postVotes;
     mapping(uint256 => int256) public postScore;
-
-    mapping(uint256 => bool) public postPendingReview;
-    mapping(uint256 => bool) public postRejected;
-
-    struct PendingComment {
-        uint256 id;
-        uint256 postId;
-        address author;
-        string content;
-        string imageCid;
-        uint256 createdAt;
-        uint8 status; // 0 = pending, 1 = approved, 2 = rejected
-        bool exists;
-    }
-
-    uint256 private nextPendingCommentId = 1;
-    mapping(uint256 => PendingComment) private pendingComments;
-    mapping(uint256 => uint256[]) private pendingCommentIdsByPost;
-
-    // Clean comments are event-only (content carried in the log, indexed by The
-    // Graph) so they cost minimal bytecode and still flow through the dApp.
-    uint256 private nextCommentId = 1;
-
-    // Locked posts stay visible but accept no new comments (clean or flagged).
-    mapping(uint256 => bool) public postLocked;
-    // commentId -> postId, recorded at creation so hideComment can verify the
-    // caller moderates the community the comment actually belongs to.
-    mapping(uint256 => uint256) private commentPostIds;
-    mapping(uint256 => bool) public commentHidden;
 
     // ERRORS //
     error CommunityDoesNotExist();
@@ -134,7 +104,6 @@ contract DecentralizedForum {
     error EmptyMetadataCID();
     error EmptyContentCID();
     error EmptyPostBatch();
-    error EmptyCommentsMerkleRoot();
     error EmptyAddress();
     error CommunityNameAlreadyExists();
     error AlreadyCommunityMember();
@@ -155,27 +124,12 @@ contract DecentralizedForum {
     error CannotRecommendSelf();
     error ModeratorOfferAlreadyPending();
     error NoPendingModeratorOffer();
-    error PostAlreadyHidden();
-    error PostNotHidden();
-    error PostIsLocked();
-    error PostNotLocked();
-    error PostAlreadyLocked();
-    error CommentAlreadyHidden();
-    error EmptyUsername();
-    error UsernameAlreadyTaken();
-    error UsernameAlreadySet();
-    error UsernameTooShort();
-    error UsernameTooLong();
-    error InvalidUsernameCharacter();
-    error ReservedUsername();
-    error NoUsernameSet();
-    error InsufficientUsernameChangeFee();
     error InvalidVoteValue();
     error InvalidCommunityName();
-    error PostNotPendingReview();
-    error CommentDoesNotExist();
-    error CommentNotPendingReview();
-    error EmptyCommentContent();
+    error OnlyDeployerAllowed();
+    error ModerationContractAlreadySet();
+    error ModerationContractNotSet();
+    error OnlyModerationContractAllowed();
 
     // EVENTS //
     event CommunityCreated(
@@ -325,133 +279,6 @@ contract DecentralizedForum {
         uint256 votedAt
     );
 
-    event PostHidden(
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address indexed hiddenBy,
-        uint256 hiddenAt
-    );
-
-    event PostRestored(
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address indexed restoredBy,
-        uint256 restoredAt
-    );
-
-    event CommentsMerkleRootUpdated(
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        bytes32 commentsMerkleRoot,
-        address indexed updatedBy,
-        uint256 updatedAt
-    );
-
-    event UsernameRegistered(
-        address indexed user,
-        string username,
-        uint256 registeredAt
-    );
-
-    event UsernameChanged(
-        address indexed user,
-        string oldUsername,
-        string newUsername,
-        uint256 changedAt
-    );
-
-    event PostSubmittedForReview(
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address indexed author,
-        string title,
-        uint256 submittedAt
-    );
-
-    event PendingPostApproved(
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address indexed moderator,
-        uint256 approvedAt
-    );
-
-    event PendingPostRejected(
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address indexed moderator,
-        uint256 rejectedAt
-    );
-
-    event CommentCreated(
-        uint256 indexed commentId,
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address author,
-        string content,
-        string imageCid,
-        uint256 createdAt
-    );
-
-    event PostLocked(
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address lockedBy,
-        uint256 lockedAt
-    );
-
-    event PostUnlocked(
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address unlockedBy,
-        uint256 unlockedAt
-    );
-
-    event CommentHidden(
-        uint256 indexed commentId,
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address hiddenBy,
-        uint256 hiddenAt
-    );
-
-    // User report of content that the automatic filters did not catch.
-    // kind 0 = post, 1 = comment. Event-only: nothing stored on-chain, the
-    // subgraph indexes it and fans it out to the community's moderators.
-    event ContentReported(
-        uint256 indexed refId,
-        uint256 indexed communityId,
-        uint8 kind,
-        address reporter,
-        string reason,
-        uint256 reportedAt
-    );
-
-    event CommentSubmittedForReview(
-        uint256 indexed commentId,
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address author,
-        string content,
-        string imageCid,
-        uint256 submittedAt
-    );
-
-    event PendingCommentApproved(
-        uint256 indexed commentId,
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address moderator,
-        uint256 approvedAt
-    );
-
-    event PendingCommentRejected(
-        uint256 indexed commentId,
-        uint256 indexed postId,
-        uint256 indexed communityId,
-        address moderator,
-        uint256 rejectedAt
-    );
-
     // MODIFIERS //
     modifier communityMustExist(uint256 communityId) {
         if (!communities[communityId].exists) {
@@ -495,7 +322,38 @@ contract DecentralizedForum {
         _;
     }
 
+    modifier onlyDeployer() {
+        if (msg.sender != deployer) {
+            revert OnlyDeployerAllowed();
+        }
+        _;
+    }
+
+    modifier onlyModerationContract() {
+        if (msg.sender != moderationContract) {
+            revert OnlyModerationContractAllowed();
+        }
+        _;
+    }
+
     // WRITE FUNCTIONS //
+
+    // One-time wiring call made right after deploy (see ignition/modules/Forum.ts).
+    function setModerationContract(address moderation) external onlyDeployer {
+        if (moderationContract != address(0)) {
+            revert ModerationContractAlreadySet();
+        }
+        moderationContract = moderation;
+    }
+
+    // Callback from ForumModeration after it approves a previously-flagged
+    // post, so activity scoring/active-moderator refresh stays centralized
+    // with the rest of that logic.
+    function awardPostApprovalActivity(uint256 communityId, address author) external onlyModerationContract {
+        activityScore[communityId][author] += POST_ACTIVITY_POINTS;
+        _refreshActiveModerators(communityId);
+    }
+
     function createCommunity(string calldata name, string calldata metadataCID, string calldata description) external {
         _createCommunity(name, metadataCID, description, 0, msg.sender);
     }
@@ -899,8 +757,9 @@ contract DecentralizedForum {
         _createPost(communityId, contentCID, title, tags, msg.sender, false);
     }
 
-    // Entry point for content the client flagged as unsafe: stored hidden and
-    // awaiting a single moderator decision.
+    // Entry point for content the client flagged as unsafe: the post is
+    // created here but immediately handed off to ForumModeration's review
+    // queue instead of counting toward activity score.
     function createFlaggedPost(uint256 communityId, string calldata contentCID, string calldata title, string calldata tags)
         external
         communityMustExist(communityId)
@@ -908,175 +767,6 @@ contract DecentralizedForum {
         notBanned(communityId)
     {
         _createPost(communityId, contentCID, title, tags, msg.sender, true);
-    }
-
-    function approvePendingPost(uint256 postId)
-        external
-        postMustExist(postId)
-        onlyCommunityModerator(posts[postId].communityId)
-    {
-        if (!postPendingReview[postId]) {
-            revert PostNotPendingReview();
-        }
-
-        postPendingReview[postId] = false;
-        posts[postId].hidden = false;
-
-        uint256 communityId = posts[postId].communityId;
-        address author = posts[postId].author;
-        activityScore[communityId][author] += POST_ACTIVITY_POINTS;
-        _refreshActiveModerators(communityId);
-
-        emit PendingPostApproved(postId, communityId, msg.sender, block.timestamp);
-    }
-
-    function rejectPendingPost(uint256 postId)
-        external
-        postMustExist(postId)
-        onlyCommunityModerator(posts[postId].communityId)
-    {
-        if (!postPendingReview[postId]) {
-            revert PostNotPendingReview();
-        }
-
-        postPendingReview[postId] = false;
-        postRejected[postId] = true;
-
-        emit PendingPostRejected(postId, posts[postId].communityId, msg.sender, block.timestamp);
-    }
-
-    // Publishes a clean comment straight to the chain (event-indexed). Same
-    // gate as submitFlaggedComment so every instance sees the same comments.
-    function addComment(uint256 postId, string calldata content, string calldata imageCid)
-        external
-        postMustExist(postId)
-    {
-        if (bytes(content).length == 0) {
-            revert EmptyCommentContent();
-        }
-
-        uint256 communityId = posts[postId].communityId;
-
-        if (isBanned[communityId][msg.sender]) {
-            revert UserBannedFromCommunity();
-        }
-
-        if (!isMember[communityId][msg.sender]) {
-            revert OnlyCommunityMembersAllowed();
-        }
-
-        if (postLocked[postId]) {
-            revert PostIsLocked();
-        }
-
-        uint256 commentId = nextCommentId;
-        nextCommentId++;
-        commentPostIds[commentId] = postId;
-
-        emit CommentCreated(
-            commentId,
-            postId,
-            communityId,
-            msg.sender,
-            content,
-            imageCid,
-            block.timestamp
-        );
-    }
-
-    function submitFlaggedComment(uint256 postId, string calldata content, string calldata imageCid)
-        external
-        postMustExist(postId)
-    {
-        if (bytes(content).length == 0) {
-            revert EmptyCommentContent();
-        }
-
-        uint256 communityId = posts[postId].communityId;
-
-        // Ban wins over the membership check: banUser also strips membership,
-        // and the banned error is the meaningful one for the user.
-        if (isBanned[communityId][msg.sender]) {
-            revert UserBannedFromCommunity();
-        }
-
-        if (!isMember[communityId][msg.sender]) {
-            revert OnlyCommunityMembersAllowed();
-        }
-
-        if (postLocked[postId]) {
-            revert PostIsLocked();
-        }
-
-        uint256 commentId = nextPendingCommentId;
-        nextPendingCommentId++;
-
-        pendingComments[commentId] = PendingComment({
-            id: commentId,
-            postId: postId,
-            author: msg.sender,
-            content: content,
-            imageCid: imageCid,
-            createdAt: block.timestamp,
-            status: 0,
-            exists: true
-        });
-
-        pendingCommentIdsByPost[postId].push(commentId);
-
-        emit CommentSubmittedForReview(
-            commentId,
-            postId,
-            communityId,
-            msg.sender,
-            content,
-            imageCid,
-            block.timestamp
-        );
-    }
-
-    function approvePendingComment(uint256 commentId) external {
-        PendingComment storage comment = _pendingCommentForReview(commentId);
-        comment.status = 1;
-
-        emit PendingCommentApproved(
-            commentId,
-            comment.postId,
-            posts[comment.postId].communityId,
-            msg.sender,
-            block.timestamp
-        );
-    }
-
-    function rejectPendingComment(uint256 commentId) external {
-        PendingComment storage comment = _pendingCommentForReview(commentId);
-        comment.status = 2;
-
-        emit PendingCommentRejected(
-            commentId,
-            comment.postId,
-            posts[comment.postId].communityId,
-            msg.sender,
-            block.timestamp
-        );
-    }
-
-    function _pendingCommentForReview(uint256 commentId) private view returns (PendingComment storage) {
-        PendingComment storage comment = pendingComments[commentId];
-
-        if (!comment.exists) {
-            revert CommentDoesNotExist();
-        }
-
-        if (comment.status != 0) {
-            revert CommentNotPendingReview();
-        }
-
-        if (!_isModerator(posts[comment.postId].communityId, msg.sender)) {
-            revert OnlyCommunityModeratorAllowed();
-        }
-
-        return comment;
     }
 
     function batchCreatePosts(
@@ -1135,198 +825,6 @@ contract DecentralizedForum {
         );
     }
 
-    function hidePost(uint256 postId)
-        external
-        postMustExist(postId)
-        onlyCommunityModerator(posts[postId].communityId)
-    {
-        if (posts[postId].hidden) {
-            revert PostAlreadyHidden();
-        }
-
-        posts[postId].hidden = true;
-
-        emit PostHidden(
-            postId,
-            posts[postId].communityId,
-            msg.sender,
-            block.timestamp
-        );
-    }
-
-    // Locking keeps the post visible but blocks any new comments on it.
-    function lockPost(uint256 postId)
-        external
-        postMustExist(postId)
-        onlyCommunityModerator(posts[postId].communityId)
-    {
-        if (postLocked[postId]) {
-            revert PostAlreadyLocked();
-        }
-
-        postLocked[postId] = true;
-
-        emit PostLocked(
-            postId,
-            posts[postId].communityId,
-            msg.sender,
-            block.timestamp
-        );
-    }
-
-    function unlockPost(uint256 postId)
-        external
-        postMustExist(postId)
-        onlyCommunityModerator(posts[postId].communityId)
-    {
-        if (!postLocked[postId]) {
-            revert PostNotLocked();
-        }
-
-        postLocked[postId] = false;
-
-        emit PostUnlocked(
-            postId,
-            posts[postId].communityId,
-            msg.sender,
-            block.timestamp
-        );
-    }
-
-    // Hides a regular on-chain comment. The stored commentId -> postId link
-    // proves which community the comment belongs to, so only that community's
-    // moderators can hide it.
-    function hideComment(uint256 commentId) external {
-        uint256 postId = commentPostIds[commentId];
-        if (postId == 0) {
-            revert CommentDoesNotExist();
-        }
-
-        uint256 communityId = posts[postId].communityId;
-        if (!_isModerator(communityId, msg.sender)) {
-            revert OnlyCommunityModeratorAllowed();
-        }
-
-        if (commentHidden[commentId]) {
-            revert CommentAlreadyHidden();
-        }
-
-        commentHidden[commentId] = true;
-
-        emit CommentHidden(
-            commentId,
-            postId,
-            communityId,
-            msg.sender,
-            block.timestamp
-        );
-    }
-
-    // Anyone can report content the automatic filters missed. No protocol fee -
-    // just the tx gas - and fully on-chain, so every community moderator (on any
-    // machine) sees it. kind 0 = post, 1 = comment.
-    function reportPost(uint256 postId, string calldata reason)
-        external
-        postMustExist(postId)
-    {
-        emit ContentReported(postId, posts[postId].communityId, 0, msg.sender, reason, block.timestamp);
-    }
-
-    function reportComment(uint256 commentId, string calldata reason) external {
-        uint256 postId = commentPostIds[commentId];
-        if (postId == 0) {
-            revert CommentDoesNotExist();
-        }
-        emit ContentReported(commentId, posts[postId].communityId, 1, msg.sender, reason, block.timestamp);
-    }
-
-    function restorePost(uint256 postId)
-        external
-        postMustExist(postId)
-        onlyCommunityModerator(posts[postId].communityId)
-    {
-        if (!posts[postId].hidden) {
-            revert PostNotHidden();
-        }
-
-        posts[postId].hidden = false;
-
-        emit PostRestored(
-            postId,
-            posts[postId].communityId,
-            msg.sender,
-            block.timestamp
-        );
-    }
-
-    function updateCommentsMerkleRoot(uint256 postId, bytes32 commentsMerkleRoot)
-        external
-        postMustExist(postId)
-        onlyCommunityModerator(posts[postId].communityId)
-    {
-        if (commentsMerkleRoot == bytes32(0)) {
-            revert EmptyCommentsMerkleRoot();
-        }
-
-        commentsMerkleRootByPost[postId] = commentsMerkleRoot;
-        commentsMerkleRootUpdatedAt[postId] = block.timestamp;
-
-        emit CommentsMerkleRootUpdated(
-            postId,
-            posts[postId].communityId,
-            commentsMerkleRoot,
-            msg.sender,
-            block.timestamp
-        );
-    }
-
-    function registerUsername(string calldata username) external {
-        if (bytes(usernames[msg.sender]).length != 0) {
-            revert UsernameAlreadySet();
-        }
-
-        _validateUsername(username);
-
-        bytes32 nameHash = keccak256(bytes(username));
-        if (usernameExists[nameHash]) {
-            revert UsernameAlreadyTaken();
-        }
-
-        usernameExists[nameHash] = true;
-        usernameOwner[nameHash] = msg.sender;
-        usernames[msg.sender] = username;
-
-        emit UsernameRegistered(msg.sender, username, block.timestamp);
-    }
-
-    function changeUsername(string calldata newUsername) external payable {
-        string memory oldUsername = usernames[msg.sender];
-
-        if (bytes(oldUsername).length == 0) {
-            revert NoUsernameSet();
-        }
-
-        if (msg.value < USERNAME_CHANGE_FEE) {
-            revert InsufficientUsernameChangeFee();
-        }
-
-        _validateUsername(newUsername);
-
-        bytes32 newHash = keccak256(bytes(newUsername));
-        if (usernameExists[newHash]) {
-            revert UsernameAlreadyTaken();
-        }
-
-        bytes32 oldHash = keccak256(bytes(oldUsername));
-        delete usernameExists[oldHash];
-        delete usernameOwner[oldHash];
-        usernameExists[newHash] = true;
-        usernameOwner[newHash] = msg.sender;
-        usernames[msg.sender] = newUsername;
-
-        emit UsernameChanged(msg.sender, oldUsername, newUsername, block.timestamp);
-    }
-
     // Community names are English-only: letters, digits, underscore, hyphen.
     function _validateCommunityName(string calldata name) private pure {
         bytes memory nameBytes = bytes(name);
@@ -1346,85 +844,6 @@ contract DecentralizedForum {
                 revert InvalidCommunityName();
             }
         }
-    }
-
-    // Enforces format (charset, length) and anti-impersonation rules. Profanity
-    // filtering is handled client-side; the chain only guarantees what it can
-    // verify cheaply.
-    function _validateUsername(string calldata username) private pure {
-        bytes memory nameBytes = bytes(username);
-
-        if (nameBytes.length < USERNAME_MIN_LENGTH) {
-            revert UsernameTooShort();
-        }
-
-        if (nameBytes.length > USERNAME_MAX_LENGTH) {
-            revert UsernameTooLong();
-        }
-
-        bytes memory lower = new bytes(nameBytes.length);
-        for (uint256 i = 0; i < nameBytes.length; i++) {
-            bytes1 c = nameBytes[i];
-            bool isLowerCase = (c >= 0x61 && c <= 0x7a);
-            bool isUpperCase = (c >= 0x41 && c <= 0x5a);
-            bool isDigit = (c >= 0x30 && c <= 0x39);
-            bool isUnderscore = (c == 0x5f);
-
-            if (!isLowerCase && !isUpperCase && !isDigit && !isUnderscore) {
-                revert InvalidUsernameCharacter();
-            }
-
-            lower[i] = isUpperCase ? bytes1(uint8(c) + 32) : c;
-        }
-
-        if (
-            _hasReservedToken(lower, "mod") ||
-            _hasReservedToken(lower, "admin") ||
-            _hasReservedToken(lower, "gm") ||
-            _hasReservedToken(lower, "moderator")
-        ) {
-            revert ReservedUsername();
-        }
-    }
-
-    // Blocks a reserved token when it stands alone: the whole name, a prefix
-    // followed by a non-letter (mod_dan, admin123), or a suffix preceded by a
-    // non-letter (x_mod). Tokens embedded in longer words (modern) stay legal.
-    function _hasReservedToken(bytes memory lowerName, bytes memory token) private pure returns (bool) {
-        uint256 nameLength = lowerName.length;
-        uint256 tokenLength = token.length;
-
-        if (nameLength < tokenLength) {
-            return false;
-        }
-
-        if (nameLength == tokenLength) {
-            return _matchesAt(lowerName, token, 0);
-        }
-
-        if (_matchesAt(lowerName, token, 0) && !_isLetter(lowerName[tokenLength])) {
-            return true;
-        }
-
-        if (_matchesAt(lowerName, token, nameLength - tokenLength) && !_isLetter(lowerName[nameLength - tokenLength - 1])) {
-            return true;
-        }
-
-        return false;
-    }
-
-    function _matchesAt(bytes memory haystack, bytes memory needle, uint256 offset) private pure returns (bool) {
-        for (uint256 i = 0; i < needle.length; i++) {
-            if (haystack[offset + i] != needle[i]) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    function _isLetter(bytes1 c) private pure returns (bool) {
-        return c >= 0x61 && c <= 0x7a;
     }
 
     function _createCommunity(
@@ -1534,21 +953,24 @@ contract DecentralizedForum {
             author: author,
             contentCID: contentCID,
             createdAt: block.timestamp,
-            exists: true,
-            hidden: flagged
+            exists: true
         });
 
         communityPostIds[communityId].push(postId);
         userPostCount[author]++;
         _trackKnownUser(communityId, author);
 
-        // Activity points wait until a moderator approves a flagged post, so
-        // unsafe content cannot farm Active-Moderator status.
+        // Activity points wait until a moderator approves a flagged post
+        // (via ForumModeration -> awardPostApprovalActivity), so unsafe
+        // content cannot farm Active-Moderator status.
         if (!flagged) {
             activityScore[communityId][author] += POST_ACTIVITY_POINTS;
             _refreshActiveModerators(communityId);
         } else {
-            postPendingReview[postId] = true;
+            if (moderationContract == address(0)) {
+                revert ModerationContractNotSet();
+            }
+            IForumModeration(moderationContract).flagPostForReview(postId, communityId, author, title);
         }
 
         emit PostCreated(
@@ -1560,16 +982,6 @@ contract DecentralizedForum {
             tags,
             block.timestamp
         );
-
-        if (flagged) {
-            emit PostSubmittedForReview(
-                postId,
-                communityId,
-                author,
-                title,
-                block.timestamp
-            );
-        }
     }
 
     function _trackKnownUser(uint256 communityId, address user) private {
@@ -1763,8 +1175,7 @@ contract DecentralizedForum {
             address author,
             string memory contentCID,
             uint256 createdAt,
-            bool exists,
-            bool hidden
+            bool exists
         )
     {
         Post memory post = posts[postId];
@@ -1775,8 +1186,7 @@ contract DecentralizedForum {
             post.author,
             post.contentCID,
             post.createdAt,
-            post.exists,
-            post.hidden
+            post.exists
         );
     }
 
@@ -2007,81 +1417,5 @@ contract DecentralizedForum {
         returns (uint256)
     {
         return posts[postId].communityId;
-    }
-
-    function isPostHidden(uint256 postId)
-        external
-        view
-        postMustExist(postId)
-        returns (bool)
-    {
-        return posts[postId].hidden;
-    }
-
-    function getCommentsMerkleRoot(uint256 postId)
-        external
-        view
-        postMustExist(postId)
-        returns (bytes32 root, uint256 updatedAt)
-    {
-        return (
-            commentsMerkleRootByPost[postId],
-            commentsMerkleRootUpdatedAt[postId]
-        );
-    }
-
-    function getPendingCommentsByPost(uint256 postId)
-        external
-        view
-        postMustExist(postId)
-        returns (uint256[] memory)
-    {
-        return pendingCommentIdsByPost[postId];
-    }
-
-    function getPendingComment(uint256 commentId)
-        external
-        view
-        returns (
-            uint256 id,
-            uint256 postId,
-            address author,
-            string memory content,
-            string memory imageCid,
-            uint256 createdAt,
-            uint8 status
-        )
-    {
-        PendingComment storage comment = pendingComments[commentId];
-
-        if (!comment.exists) {
-            revert CommentDoesNotExist();
-        }
-
-        return (
-            comment.id,
-            comment.postId,
-            comment.author,
-            comment.content,
-            comment.imageCid,
-            comment.createdAt,
-            comment.status
-        );
-    }
-
-    function getUsername(address user) external view returns (string memory) {
-        return usernames[user];
-    }
-
-    function getAddressByUsername(string calldata username) external view returns (address) {
-        return usernameOwner[keccak256(bytes(username))];
-    }
-
-    function isUsernameAvailable(string calldata username) external view returns (bool) {
-        if (bytes(username).length == 0) {
-            return false;
-        }
-
-        return !usernameExists[keccak256(bytes(username))];
     }
 }

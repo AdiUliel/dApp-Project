@@ -216,7 +216,6 @@ describe("DecentralizedForum", function () {
       expect(post[2]).to.equal(user1.address);
       expect(post[3]).to.equal("post-cid-1");
       expect(post[5]).to.equal(true);
-      expect(post[6]).to.equal(false);
     });
 
     it("should not allow a non-member to create a post", async function () {
@@ -271,76 +270,8 @@ describe("DecentralizedForum", function () {
     });
   });
 
-  describe("post moderation", function () {
-    it("should allow a moderator to hide and restore a post", async function () {
-      const forum = await deployForum();
-
-      await forum.createCommunity("Solidity", "cid-123", "a community");
-      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
-
-      await forum.hidePost(1n);
-      expect(await forum.isPostHidden(1n)).to.equal(true);
-
-      const hiddenPost = await forum.getPost(1n);
-      expect(hiddenPost[6]).to.equal(true);
-
-      await forum.restorePost(1n);
-      expect(await forum.isPostHidden(1n)).to.equal(false);
-    });
-
-    it("should not allow a non-moderator to hide a post", async function () {
-      const forum = await deployForum();
-
-      await forum.createCommunity("Solidity", "cid-123", "a community");
-      await forum.connect(user1).joinCommunity(1n);
-      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
-
-      await expect(
-        forum.connect(user1).hidePost(1n)
-      ).to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
-    });
-  });
-
-  describe("off-chain comments checkpoint", function () {
-    it("should not store comments on-chain and should allow moderator to update comments Merkle root", async function () {
-      const forum = await deployForum();
-
-      await forum.createCommunity("Solidity", "cid-123", "a community");
-      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
-
-      const root = ethers.keccak256(ethers.toUtf8Bytes("comments batch 1"));
-      await forum.updateCommentsMerkleRoot(1n, root);
-
-      const data = await forum.getCommentsMerkleRoot(1n);
-      expect(data[0]).to.equal(root);
-      expect(data[1]).to.be.greaterThan(0n);
-    });
-
-    it("should not allow a non-moderator to update comments Merkle root", async function () {
-      const forum = await deployForum();
-
-      await forum.createCommunity("Solidity", "cid-123", "a community");
-      await forum.connect(user1).joinCommunity(1n);
-      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
-
-      const root = ethers.keccak256(ethers.toUtf8Bytes("comments batch 1"));
-
-      await expect(
-        forum.connect(user1).updateCommentsMerkleRoot(1n, root)
-      ).to.be.revertedWithCustomError(forum, "OnlyCommunityModeratorAllowed");
-    });
-
-    it("should not allow an empty comments Merkle root", async function () {
-      const forum = await deployForum();
-
-      await forum.createCommunity("Solidity", "cid-123", "a community");
-      await forum.createPost(1n, "post-cid-1", "a title", "tag1,tag2");
-
-      await expect(
-        forum.updateCommentsMerkleRoot(1n, ethers.ZeroHash)
-      ).to.be.revertedWithCustomError(forum, "EmptyCommentsMerkleRoot");
-    });
-  });
+  // Post hide/restore and the comments Merkle root checkpoint now live on
+  // ForumModeration - see ModerationQueueTest.ts.
 
   describe("read functions", function () {
     it("should return the correct community id for a post", async function () {
