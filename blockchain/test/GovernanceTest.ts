@@ -212,23 +212,11 @@ describe("DecentralizedForum governance upgrade", function () {
     expect(proposals.map((id: bigint) => id)).to.deep.equal([1n]);
   });
 
-  it("resolves usernames to addresses", async function () {
+  // Username registration/lookup now lives on the standalone UsernameRegistry
+  // contract - see UsernameAndVotesTest.ts (including its own case-
+  // insensitivity coverage).
+  it("treats community names case-insensitively for uniqueness", async function () {
     const forum = await deployForum();
-
-    await forum.connect(user1).registerUsername("satoshi_99");
-    expect(await forum.getAddressByUsername("satoshi_99")).to.equal(user1.address);
-    expect(await forum.getAddressByUsername("nobody")).to.equal(ethers.ZeroAddress);
-  });
-
-  it("treats usernames and community names case-insensitively for uniqueness", async function () {
-    const forum = await deployForum();
-
-    await forum.connect(user1).registerUsername("Satoshi");
-    await expect(forum.connect(user2).registerUsername("satoshi"))
-      .to.be.revertedWithCustomError(forum, "UsernameAlreadyTaken");
-    // Lookups are case-insensitive too.
-    expect(await forum.getAddressByUsername("SATOSHI")).to.equal(user1.address);
-    expect(await forum.isUsernameAvailable("sAtOsHi")).to.equal(false);
 
     await forum.createCommunity("Blockchain", "cid", "desc");
     await expect(forum.connect(user1).createCommunity("blockchain", "cid2", "desc2"))
@@ -289,17 +277,7 @@ describe("DecentralizedForum governance upgrade", function () {
     expect(await forum.isUserModeratorOfCommunity(1n, user3.address)).to.equal(true);
   });
 
-  it("does not restore a pending or rejected post (invariant hidden)", async function () {
-    const forum = await deployForum();
-    await forum.createCommunity("react", "cid", "desc");
-    await forum.connect(user1).joinCommunity(1n);
-    await forum.connect(user1).createFlaggedPost(1n, "cid-p", "t", ""); // hidden + pending
-
-    await expect(forum.restorePost(1n))
-      .to.be.revertedWithCustomError(forum, "CannotRestoreModeratedPost");
-
-    await forum.rejectPendingPost(1n); // hidden + rejected
-    await expect(forum.restorePost(1n))
-      .to.be.revertedWithCustomError(forum, "CannotRestoreModeratedPost");
-  });
+  // The pending/rejected-post restore invariant is covered in
+  // ModerationQueueTest.ts, since restorePost/rejectPendingPost live on
+  // ForumModeration, not this contract.
 });

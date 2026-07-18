@@ -1,10 +1,5 @@
-// IPFS access for the browser. WRITES go through our upload-service (which holds
-// the Pinata JWT server-side) so no credential is ever shipped in this bundle.
-// READS stay client-side via public gateways - no credential needed.
-const UPLOAD_SERVICE_URL = import.meta.env.VITE_UPLOAD_SERVICE_URL || 'http://localhost:8787'
+const PINATA_JWT = import.meta.env.VITE_PINATA_JWT
 
-// Client-side mirror of upload-service/limits.js. This is only a first-pass
-// filter for fast UX feedback; the service re-checks and is the real authority.
 export const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 // 5 MB
 export const MAX_IMAGES_PER_POST = 4
 export const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
@@ -49,30 +44,23 @@ async function fetchFromAnyGateway(cid: string): Promise<Response> {
   throw lastError
 }
 
-// Reads the service's JSON error body if present, else a generic message.
-async function uploadError(response: Response): Promise<Error> {
-  try {
-    const body = await response.json()
-    if (body && body.error) return new Error(body.error)
-  } catch {
-    // no JSON body
-  }
-  return new Error(`Upload service responded ${response.status}`)
-}
-
-// Pins JSON via the upload service so content survives independently of any local
-// machine, and returns its CID.
+// Pins JSON to Pinata so content survives independently of any local machine, and returns its CID.
 export async function addJson(data: unknown): Promise<string> {
-  const response = await fetch(`${UPLOAD_SERVICE_URL}/api/upload-json`, {
+  const response = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
+    headers: {
+      Authorization: `Bearer ${PINATA_JWT}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ pinataContent: data }),
   })
 
-  if (!response.ok) throw await uploadError(response)
+  if (!response.ok) {
+    throw new Error(`Pinata pin request failed with status ${response.status}`)
+  }
 
   const result = await response.json()
-  return result.cid as string
+  return result.IpfsHash as string
 }
 
 // Reads JSON back via whichever public gateway answers first.
@@ -81,7 +69,7 @@ export async function getJson<T>(cid: string): Promise<T> {
   return response.json() as Promise<T>
 }
 
-// Pins a binary file (image/GIF) via the upload service and returns its CID.
+// Pins a binary file (image/GIF) to Pinata and returns its CID.
 // Pre-validates locally so obvious rejects don't even hit the network.
 export async function addFile(file: File): Promise<string> {
   const invalid = validateImageFile(file)
@@ -90,33 +78,18 @@ export async function addFile(file: File): Promise<string> {
   const formData = new FormData()
   formData.append('file', file)
 
-  const response = await fetch(`${UPLOAD_SERVICE_URL}/api/upload`, {
+  const response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
     method: 'POST',
+    headers: { Authorization: `Bearer ${PINATA_JWT}` },
     body: formData,
   })
 
-  if (!response.ok) throw await uploadError(response)
+  if (!response.ok) {
+    throw new Error(`Pinata file pin failed with status ${response.status}`)
+  }
 
   const result = await response.json()
-  return result.cid as string
-}
-
-// Best-effort: tell the service these CIDs are now referenced on-chain, so its
-// orphan cleanup never touches them. Failure here is non-fatal (the pin still
-// exists; it just stays "pending" until confirmed or reaped).
-export async function confirmUploads(cids: string[]): Promise<void> {
-  const real = cids.filter(Boolean)
-  if (real.length === 0) return
-  try {
-    await fetch(`${UPLOAD_SERVICE_URL}/api/confirm`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cids: real }),
-      signal: AbortSignal.timeout(5000),
-    })
-  } catch {
-    // non-fatal
-  }
+  return result.IpfsHash as string
 }
 
 export function ipfsUrl(cid: string): string {

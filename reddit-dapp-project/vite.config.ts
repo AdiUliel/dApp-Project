@@ -1,3 +1,4 @@
+import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -9,4 +10,9 @@ export default defineConfig({
   // paths the bundle 404s there. This is what makes the frontend itself
   // deployable to IPFS, removing the last centralized web host.
   base: './',
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
 })

@@ -2,7 +2,7 @@
 // "graph offline" and fall back to chain reads. The endpoint is set from the
 // active network (see setGraphEndpoint) so the same build works local + Sepolia.
 
-import { GRAPH_ENDPOINTS, LOCAL_CHAIN_ID } from './config'
+import { GRAPH_ENDPOINTS, LOCAL_CHAIN_ID } from '@/lib/config'
 
 let graphEndpoint = GRAPH_ENDPOINTS[LOCAL_CHAIN_ID]
 
