@@ -1,0 +1,275 @@
+================================================================================
+REFACTOR SUMMARY - App.tsx and App.css
+================================================================================
+Date:  2026-07-19
+Scope: reddit-dapp-project/src (frontend only)
+Goal:  Split two oversized files into maintainable, clearly-named modules.
+Note:  No feature was added, removed, or intentionally changed. This is a
+       structural refactor plus four latent bug fixes described in section 6.
+
+
+--------------------------------------------------------------------------------
+1. HEADLINE NUMBERS
+--------------------------------------------------------------------------------
+
+  App.tsx                3921  ->    61 lines   (layout shell only)
+  App.css                1509  ->    34 lines   (ordered @import list)
+  useForumState.ts       2444  ->   583 lines   (after the second split)
+
+  Largest file before:   3921 lines (App.tsx)
+  Largest file after:     583 lines (context/useForumState.ts)
+
+  New files created:      ~60 (components, hooks, types, styles)
+
+
+--------------------------------------------------------------------------------
+2. WHAT App.tsx WAS
+--------------------------------------------------------------------------------
+
+A single App() component containing:
+  - ~55 useState hooks
+  - ~15 useEffect hooks
+  - ~25 async chain/contract functions
+  - 12 render* closures (renderCommunityFeed alone was ~390 lines)
+
+Everything shared one closure, which is why it could not be split
+mechanically - the render functions read dozens of local variables directly.
+
+
+--------------------------------------------------------------------------------
+3. NEW STRUCTURE - App.tsx
+--------------------------------------------------------------------------------
+
+App.tsx now only composes:
+
+    <ForumProvider>          state
+      <ForumShell>           layout: TopBar, toasts, view switch, modals
+
+3a. TYPES
+    types/forum.ts                   153   all domain types (Community, Post,
+                                           Comment, Vote, Notification, ...)
+
+3b. PURE HELPERS (no React, no chain)
+    lib/contracts.ts                  30   ABI wiring, combined error fragments
+    lib/format.ts                     67   formatAddress/Date/Eth, roleLabel,
+                                           hotScore, type guards
+    lib/txErrors.ts                   50   ethers error -> translated reason
+    lib/storageKeys.ts                 7   localStorage key bases
+    lib/i18n.ts                    (mod)   added exported `Translator` type
+
+3c. STATE LAYER  (context/)
+    useForumState.ts                 583   composition root: wiring,
+                                           cross-cutting effects, selection
+    forumContext.ts                    9   context; value type DERIVED from the
+                                           hook, so there is no second place to
+                                           update when adding a field
+    ForumProvider.tsx                 13   provider component
+    useForum.ts                       11   consumer hook
+
+    context/forum/ - 19 domain hooks:
+      core.ts                         20   shared services type (t, contracts,
+                                           status) passed to every domain hook
+      useCommunities.ts              377   community list, membership, removal
+                                           votes, create/join/leave
+      usePosts.ts                    303   posts, composer, loadPosts fan-out,
+                                           tx reconciliation
+      useModerationActions.ts        267   review decisions, governance writes
+      useOnChainComments.ts          216   comment loading (graph + chain
+                                           fallback), drafts
+      useUsernameDirectory.ts        177   registry, name cache, availability
+      useScopedStorage.ts            158   deployment-scoped localStorage
+      useContracts.ts                145   address resolution, getContract
+      useModeratorEvents.ts          134   live contract event listeners
+      useTrending.ts                 110   home feed + hot ranking
+      useNotifications.ts             95   notification merge (graph + local)
+      useSearch.ts                    89   search + offline degradation
+      useFeedPagination.ts            87   visibility filters + paging
+      useReports.ts                   75   content reports
+      useVotes.ts                     62   scores + optimistic voting
+      useIpfsMetadata.ts              59   CID metadata cache
+      useModeratorRoster.ts           58   moderator roster (read-only)
+      useProfile.ts                   39   profile stats + activity
+      useStatusMessages.ts            29   toast channels
+      useLanguage.ts                  14   language + translator
+
+3d. COMPONENTS  (components/, 2030 lines total)
+      layout/       TopBar, CommunitySidebar, DetailsSidebar
+      community/    CommunityFeed, CommunityHero, CommunityNavItem
+      post/         PostCard, VoteBox, PostImages, PostKebabMenu,
+                    CreatePostCard
+      comment/      CommentThread
+      feed/         TrendingFeed, FeedPagination
+      moderation/   PendingReviewPanel, ModeratorActionsModal
+      notifications/ NotificationsDropdown, NotificationList, ActionItems
+      search/       SearchView
+      profile/      ProfileView
+      modals/       ForumModals, UsernameModals, CommunityModals,
+                    ReportModal, ReviewPromptModal
+
+    Largest component: CommentThread.tsx at 154 lines.
+
+
+--------------------------------------------------------------------------------
+4. NEW STRUCTURE - App.css
+--------------------------------------------------------------------------------
+
+App.css is now only a header comment plus 20 @import lines.
+Rules moved to styles/ (1530 lines total, each file ~13-180 lines):
+
+    base.css            resets, inherited form typography
+    shell.css           app shell, topbar frame, brand, wallet, toasts, landing
+    layout.css          three-column grid, sidebars, .panel, headings, inputs
+    buttons.css         button variants, pills, badges
+    communities.css     sidebar community list
+    feed.css            main feed column, community hero, meta rows
+    post.css            post card, vote box, tag row
+    comments.css        comment box and items
+    details.css         details sidebar, empty states, layout breakpoints
+    search.css          topbar search field, hero actions
+    governance.css      moderator roster, active box, tool stack
+    modals.css          modal overlay/card chrome + breakpoints
+    topbar-actions.css  brand button, nav buttons, notification badge
+    pages.css           full-width page views, chips, result rows, stats
+    notifications.css   notification/activity lists, language toggle
+    images.css          post images, file input, previews
+    moderation.css      review queue, notifications dropdown, tool boxes
+    composer.css        composer, toolbar, emoji grid, rich text
+    kebab.css           kebab menus, comment kebab, locked notice
+    overrides.css       later refinements that must load last
+
+** IMPORT ORDER IS LOAD-BEARING **
+
+The original file redefined some selectors later to deliberately override
+earlier ones:
+    .post-card    line  465, again at 1363 (gains position:relative so the
+                  kebab can be pinned to it)
+    .comment-item lines 597, 1306, 1379 (gains right padding so text clears
+                  its kebab)
+
+Because of this, the split cuts CONTIGUOUS line ranges only and re-imports
+them in the original order. Do not sort or regroup the @import list. Put new
+rules in the file matching their concern; only use overrides.css when you
+specifically need to beat an earlier rule.
+
+
+--------------------------------------------------------------------------------
+5. HOW THE STATE LAYER IS ORGANISED (important for future edits)
+--------------------------------------------------------------------------------
+
+Dependency rule: domain hooks depend on `core` (translate, contracts, status)
+and on loaders passed into them. Loaders never call actions; actions call
+loaders. The hook call order in useForumState.ts is a topological sort of that
+graph - each hook only receives loaders from hooks constructed above it.
+
+One cycle existed and was removed rather than worked around:
+    moderation needed loadPosts/loadCommunities
+    posts/communities needed loadModeratorInfo
+
+Fixed by splitting moderation into:
+    useModeratorRoster.ts    - read side, depends on nothing (constructed early)
+    useModerationActions.ts  - write side, takes loaders (constructed late)
+
+An earlier attempt wired this with refs instead; lint correctly rejected it
+(variable accessed before declaration, ref mutation during render). Merging
+those two hooks back together would reintroduce the cycle.
+
+
+--------------------------------------------------------------------------------
+6. BEHAVIOUR CHANGES (the only intentional ones)
+--------------------------------------------------------------------------------
+
+Four setState-in-effect issues were found and fixed. These were NOT introduced
+by the refactor - they existed in the original App.tsx.
+
+Verified: linting the original App.tsx from git shows it contains
+`setFeedPage(1)` inside a useEffect at line 427, yet the rule reported ZERO
+violations. The React Compiler-based analyzer was silently bailing out on the
+3921-line component. Splitting the file is what made them visible.
+
+Each caused a cascading render (render stale value, then immediately re-render):
+
+  a) useFeedPagination - page clamp when the list shrinks
+  b) useFeedPagination - reset to page 1 on community/page-size change
+  c) useUsernameDirectory - clearing availability when the input empties
+  d) useForumState - collapsing the expanded post on community change
+
+Fixes (a,b,d) adjust state during render, React's documented pattern.
+Fix (c) derives the value instead of storing and clearing it.
+
+FLOWS TO SMOKE-TEST because of the above:
+  [ ] feed pagination: page numbers, page-size chips, shrinking list
+  [ ] username availability text while typing / clearing the field
+  [ ] expanding a post, then switching community (selection should clear)
+
+One bug I introduced during the refactor and caught on review:
+  ProfileView originally consulted usernamesCache[profileAddress] before
+  profileData?.username. My first version dropped that, which would have shown
+  the wrong display name for cached users. Fixed; usernamesCache is exposed on
+  the context.
+
+
+--------------------------------------------------------------------------------
+7. VERIFICATION PERFORMED
+--------------------------------------------------------------------------------
+
+  npx tsc -b        clean
+  npm run build     succeeds
+
+  npm run lint      2 errors, 14 warnings
+
+    Both errors are PRE-EXISTING and in files never touched by this refactor:
+      components/Composer.tsx        react-refresh/only-export-components
+      features/wallet/WalletProvider.tsx  same rule
+    Confirmed unmodified via git status. Note this means `npm run lint` was
+    already failing before this work started - it is not a clean baseline.
+
+    Warnings went 11 -> 14, all react-hooks/exhaustive-deps, same class as
+    before. Same cause as section 6: smaller functions mean the analyzer now
+    actually sees the composer's effects.
+
+  CSS proven lossless TWICE:
+    1. The 20 split files re-concatenate byte-identical to the original
+       App.css (diff clean).
+    2. Rebuilt with the original App.css and diffed the emitted bundle
+       against the new one - byte-identical. No rule lost or reordered.
+
+  NOT verified: runtime behaviour. There is no frontend test runner in this
+  project (CI only runs `npx tsc -b`), so typecheck and lint cannot catch a
+  behavioural regression. The flows in section 6 should be clicked through
+  against Sepolia before committing.
+
+
+--------------------------------------------------------------------------------
+8. FILES MODIFIED (vs. created)
+--------------------------------------------------------------------------------
+
+  MODIFIED:
+    src/App.tsx        rewritten as a 61-line composition root
+    src/App.css        rewritten as a 34-line ordered @import list
+    src/lib/i18n.ts    added exported `Translator` type (additive only;
+                       makeTranslator's return type is now named)
+
+  CREATED:
+    src/types/         1 file
+    src/context/       4 files + forum/ (20 hook files)
+    src/components/    25 files across 10 folders
+    src/lib/           4 files
+    src/styles/        20 files
+
+  DELETED:
+    src/context/forum/useModeration.ts   superseded by the roster/actions
+                                         split; confirmed no remaining imports
+
+  UNCHANGED:
+    src/components/Composer.tsx, src/components/Modal.tsx,
+    src/features/wallet/*, src/services/*, src/lib/config.ts,
+    src/lib/contentSafety.ts, src/lib/usernamePolicy.ts,
+    src/lib/queryClient.ts, src/main.tsx
+    (main.tsx needed no change: WalletProvider already wraps App, so
+     ForumProvider nests correctly inside it)
+
+  NOT COMMITTED: reddit-dapp-project/package-lock.json was modified by an
+  `npm install` (frontend deps were not installed in this checkout). The churn
+  was unrelated platform-specific pruning, so it was reverted.
+
+================================================================================

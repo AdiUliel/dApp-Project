@@ -1,0 +1,58 @@
+/* Sidebar community list: rows, avatars, and the muted/warning text scale. */
+
+.community-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.community-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 1rem;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.035);
+  color: #e2e8f0;
+  text-align: start;
+}
+
+.community-item.active,
+.community-item:hover {
+  border-color: rgba(251, 146, 60, 0.4);
+  background: rgba(251, 146, 60, 0.1);
+}
+
+.community-avatar {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.75rem;
+  background: rgba(255, 69, 0, 0.18);
+  color: #fed7aa;
+  font-weight: 900;
+}
+
+.community-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.community-main small,
+.muted-text,
+.warning-text,
+.form-footer small {
+  color: #94a3b8;
+}
+
+.warning-text {
+  padding: 0.8rem 1rem;
+  border-radius: 1rem;
+  background: rgba(250, 204, 21, 0.1);
+  color: #fde68a;
+}

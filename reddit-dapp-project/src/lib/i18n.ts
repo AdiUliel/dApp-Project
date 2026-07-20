@@ -835,7 +835,10 @@ export function loadLanguage(): Language {
   return saved === 'he' ? 'he' : 'en'
 }
 
-export function makeTranslator(lang: Language) {
+/** The bound translate function handed around via ForumProvider as `t`. */
+export type Translator = (key: TranslationKey, params?: Record<string, string | number>) => string
+
+export function makeTranslator(lang: Language): Translator {
   return (key: TranslationKey, params?: Record<string, string | number>): string => {
     let text = dictionaries[lang][key] || dictionaries.en[key] || key
 

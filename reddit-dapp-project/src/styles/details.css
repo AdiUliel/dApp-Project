@@ -1,0 +1,64 @@
+/* Details sidebar cards, empty states, and the breakpoints that collapse the three-column grid. */
+
+.details-card {
+  position: relative;
+}
+
+.details-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+.details-grid span {
+  color: #94a3b8;
+}
+
+.details-grid strong {
+  text-align: right;
+}
+
+.empty-state {
+  padding: 2rem;
+  text-align: center;
+}
+
+@media (max-width: 1180px) {
+  .forum-layout {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+
+  .details-sidebar {
+    display: none;
+  }
+}
+
+@media (max-width: 820px) {
+  .topbar,
+  .community-hero,
+  .form-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .forum-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+  }
+
+  .post-card {
+    flex-direction: column;
+  }
+
+  .post-vote-box {
+    flex-direction: row;
+    justify-content: flex-start;
+    width: auto;
+    margin: 0.9rem 0.9rem 0;
+    padding-inline: 0.8rem;
+  }
+}

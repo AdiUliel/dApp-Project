@@ -1,0 +1,116 @@
+/* Post card, vote box and tag row. */
+
+.post-card {
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+
+.post-card.selected {
+  border-color: rgba(251, 146, 60, 0.5);
+}
+
+.post-card:hover {
+  transform: translateY(-1px);
+}
+
+.hidden-post {
+  background: rgba(69, 26, 26, 0.82);
+}
+
+.post-card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.post-content-button {
+  display: block;
+  width: 100%;
+  border: 0;
+  padding: 1rem;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+}
+
+.post-vote-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.15rem;
+  flex-shrink: 0;
+  width: 3.2rem;
+  margin-block: 1rem;
+  margin-inline-start: 0.9rem;
+  padding: 0.4rem 0;
+  border-radius: 0.9rem;
+  background: rgba(15, 23, 42, 0.58);
+  color: #cbd5e1;
+  align-self: flex-start;
+}
+
+.post-vote-box strong {
+  color: #f8fafc;
+}
+
+.post-vote-box .score-positive {
+  color: #fdba74;
+}
+
+.post-vote-box .score-negative {
+  color: #93c5fd;
+}
+
+.vote-button {
+  border: 0;
+  padding: 0.15rem 0.6rem;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 0.95rem;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.vote-button:hover {
+  background: rgba(148, 163, 184, 0.14);
+  color: #f8fafc;
+}
+
+.vote-button.voted-up {
+  color: #fb923c;
+}
+
+.vote-button.voted-down {
+  color: #60a5fa;
+}
+
+.post-main-content h3 {
+  margin: 0.35rem 0;
+  color: #f8fafc;
+  font-size: 1.35rem;
+  letter-spacing: -0.03em;
+}
+
+.post-main-content p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-bottom: 0.75rem;
+  color: #cbd5e1;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  white-space: pre-wrap;
+}
+
+.tag-row {
+  margin-bottom: 0.7rem;
+}
+
+.tag-row span {
+  border-radius: 999px;
+  padding: 0.22rem 0.55rem;
+  background: rgba(59, 130, 246, 0.14);
+  color: #bfdbfe;
+  font-size: 0.8rem;
+}

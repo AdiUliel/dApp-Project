@@ -1,0 +1,40 @@
+/* Brand button, topbar nav buttons and the notification count badge. */
+
+.brand-button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.topbar-nav-button {
+  position: relative;
+  white-space: nowrap;
+}
+
+.topbar-nav-button.active-nav {
+  border-color: rgba(251, 146, 60, 0.5);
+  background: rgba(251, 146, 60, 0.12);
+}
+
+.notification-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.3rem;
+  height: 1.3rem;
+  margin-inline-start: 0.4rem;
+  border-radius: 999px;
+  padding: 0 0.3rem;
+  background: #ef4444;
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 800;
+}

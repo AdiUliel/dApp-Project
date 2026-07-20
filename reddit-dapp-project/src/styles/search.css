@@ -1,0 +1,34 @@
+/* Topbar search field and the community hero action row. */
+
+.search-shell {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 1;
+  max-width: 520px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  padding: 0 0.8rem;
+  background: rgba(15, 23, 42, 0.72);
+  color: #94a3b8;
+}
+
+.search-shell input {
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.search-shell input:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}

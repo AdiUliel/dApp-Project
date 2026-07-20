@@ -1,0 +1,40 @@
+/* Notification and activity lists, and the language toggle. */
+
+.notification-list,
+.activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.notification-item,
+.activity-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.9rem;
+  padding: 0.75rem 0.9rem;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.notification-item.unread {
+  border-color: rgba(251, 146, 60, 0.45);
+  background: rgba(251, 146, 60, 0.08);
+}
+
+.notification-item small,
+.activity-item small {
+  color: #94a3b8;
+}
+
+.lang-toggle {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.lang-toggle .chip {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+}

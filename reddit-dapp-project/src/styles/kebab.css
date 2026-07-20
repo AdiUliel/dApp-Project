@@ -1,0 +1,90 @@
+/* Three-dot kebab menus, comment kebab placement, locked notice, clickable notifications. */
+
+/* Kebab (three-dot) moderator menus */
+.kebab-wrapper {
+  position: relative;
+  align-self: flex-start;
+  margin-inline-start: auto;
+}
+
+.kebab-button {
+  border: 1px solid transparent;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: #94a3b8;
+  width: 1.9rem;
+  height: 1.9rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kebab-button:hover {
+  border-color: rgba(148, 163, 184, 0.3);
+  background: rgba(255, 255, 255, 0.06);
+  color: #f8fafc;
+}
+
+.kebab-menu {
+  position: absolute;
+  top: 2.1rem;
+  inset-inline-end: 0;
+  z-index: 30;
+  min-width: 13rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0.3rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 0.8rem;
+  background: rgba(15, 23, 42, 0.97);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+}
+
+.kebab-menu button {
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: #e2e8f0;
+  text-align: start;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.kebab-menu button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.kebab-menu button.danger {
+  color: #fca5a5;
+}
+
+.kebab-menu button.danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.comment-item {
+  position: relative;
+}
+
+.comment-kebab {
+  position: absolute;
+  top: 0.35rem;
+  inset-inline-end: 0.35rem;
+}
+
+.locked-notice {
+  border: 1px dashed rgba(251, 146, 60, 0.4);
+  border-radius: 0.8rem;
+  padding: 0.7rem 0.9rem;
+  margin-top: 0.5rem;
+}
+
+/* Clickable notifications (click marks a single one as read) */
+.notification-item.clickable {
+  cursor: pointer;
+}
+
+.notification-item.clickable:hover {
+  border-color: rgba(251, 146, 60, 0.7);
+}

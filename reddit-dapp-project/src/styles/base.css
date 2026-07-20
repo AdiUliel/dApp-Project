@@ -1,0 +1,15 @@
+/* Element resets and inherited form typography. */
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}

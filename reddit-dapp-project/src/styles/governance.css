@@ -1,0 +1,42 @@
+/* Moderator roster, active-user box and the governance tool stack. */
+
+.secondary-create-card {
+  padding: 1rem;
+}
+
+.badge.info {
+  background: rgba(59, 130, 246, 0.14);
+  color: #bfdbfe;
+}
+
+.governance-card {
+  margin-bottom: 1rem;
+}
+
+.mod-list,
+.governance-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+}
+
+.mod-row,
+.active-box {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.9rem;
+  padding: 0.7rem 0.8rem;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.mod-row strong,
+.active-box strong {
+  display: block;
+}
+
+.mod-row small,
+.active-box small {
+  display: block;
+  margin-top: 0.18rem;
+  color: #94a3b8;
+}

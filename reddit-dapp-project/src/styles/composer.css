@@ -1,0 +1,108 @@
+/* Composer textarea, formatting toolbar, emoji grid and rich-text rendering. */
+
+/* Composer (emoji + formatting toolbar) */
+.composer {
+  position: relative;
+  margin-bottom: 0.65rem;
+}
+
+.composer textarea {
+  margin-bottom: 0;
+  padding-bottom: 2.3rem;
+}
+
+.composer.post-body-input {
+  min-height: 0;
+}
+
+.composer.post-body-input textarea {
+  min-height: 8rem;
+}
+
+.composer-toolbar {
+  position: absolute;
+  bottom: 0.45rem;
+  inset-inline-start: 0.6rem;
+  display: flex;
+  gap: 0.3rem;
+}
+
+.composer-tool {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.55rem;
+  background: rgba(15, 23, 42, 0.85);
+  color: #cbd5e1;
+  min-width: 1.9rem;
+  height: 1.9rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.composer-tool:hover,
+.composer-tool.active {
+  border-color: rgba(251, 146, 60, 0.72);
+  color: #f8fafc;
+}
+
+.composer-tool.bold {
+  font-weight: 800;
+}
+
+.composer-tool.italic {
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+
+.composer-tool.mono {
+  font-family: monospace;
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 0.15rem;
+  margin-top: 0.4rem;
+  padding: 0.45rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.9rem;
+  background: rgba(15, 23, 42, 0.92);
+}
+
+.emoji-grid button {
+  border: 0;
+  background: transparent;
+  font-size: 1.15rem;
+  padding: 0.2rem;
+  cursor: pointer;
+  border-radius: 0.4rem;
+}
+
+.emoji-grid button:hover {
+  background: rgba(251, 146, 60, 0.18);
+}
+
+/* Rich text rendering: keep author line breaks, style inline code */
+.rich-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rich-text code {
+  background: rgba(15, 23, 42, 0.76);
+  border-radius: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  font-size: 0.9em;
+}
+
+.disconnect-button {
+  min-height: 1.9rem;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.82rem;
+}
+
+@media (max-width: 720px) {
+  .emoji-grid {
+    grid-template-columns: repeat(8, 1fr);
+  }
+}

@@ -1,0 +1,180 @@
+/* Later refinements that deliberately override earlier rules: modal sizing, post-kebab pinning, optimistic (confirming) states and feed pagination. Must stay last. */
+
+/* Slicker create-community / sub-community modals */
+.modal-card {
+  border-radius: 1.1rem;
+}
+
+.modal-card h3 {
+  margin: 0;
+  letter-spacing: -0.03em;
+}
+
+.modal-card input,
+.modal-card textarea,
+.modal-card .composer textarea {
+  padding: 0.65rem 0.8rem;
+  font-size: 0.92rem;
+  border-radius: 0.7rem;
+}
+
+.modal-card textarea,
+.modal-card .composer textarea {
+  min-height: 4.2rem;
+}
+
+.modal-card .primary-button,
+.modal-card .ghost-button,
+.modal-card .secondary-button {
+  min-height: 2.3rem;
+  font-size: 0.9rem;
+}
+
+/* Post kebab: pinned to the card corner so it is visible collapsed or expanded */
+.post-card {
+  position: relative;
+}
+
+.post-kebab {
+  position: absolute;
+  top: 0.6rem;
+  inset-inline-end: 0.6rem;
+  z-index: 5;
+}
+
+.post-main-content {
+  padding-inline-end: 1.9rem;
+}
+
+/* Keep comment text clear of the comment kebab */
+.comment-item {
+  padding-inline-end: 2.4rem;
+}
+
+/* Optimistic (confirming) posts and comments: shown immediately, dimmed with a
+   subtle pulse until the chain confirms and the graph reconciles them. */
+.confirming-post,
+.confirming-comment {
+  opacity: 0.72;
+}
+
+.confirming-post {
+  border-inline-start: 2px solid rgba(251, 146, 60, 0.55);
+}
+
+@keyframes confirm-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.confirming-post .badge.info {
+  animation: confirm-pulse 1.4s ease-in-out infinite;
+}
+
+/* Static vote box for a not-yet-confirmed post (no clickable arrows) */
+.vote-box-static .vote-button-disabled {
+  padding: 0.15rem 0.6rem;
+  color: rgba(148, 163, 184, 0.45);
+  font-size: 0.95rem;
+  cursor: default;
+}
+
+/* Feed pagination */
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.6rem 0.2rem;
+}
+
+.pagination.top {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  margin-bottom: 0.4rem;
+}
+
+.pagination.bottom {
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  margin-top: 0.4rem;
+}
+
+.page-size {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.page-size .chip {
+  min-width: 1.9rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.6);
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.page-size .chip.active {
+  border-color: rgba(251, 146, 60, 0.7);
+  color: #fb923c;
+}
+
+.page-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.page-btn {
+  min-width: 1.9rem;
+  height: 1.9rem;
+  padding: 0 0.45rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.6);
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.page-btn:hover:not(:disabled) {
+  border-color: rgba(148, 163, 184, 0.5);
+  color: #f8fafc;
+}
+
+.page-btn.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.page-ellipsis {
+  color: #64748b;
+  padding: 0 0.15rem;
+}
+
+.page-info {
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.hidden-toggle {
+  align-self: flex-start;
+  min-height: 1.9rem;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.82rem;
+  margin-bottom: 0.4rem;
+}
+
+.confirming-community {
+  opacity: 0.72;
+}
