@@ -2,7 +2,8 @@
 
 Reppit is a decentralized Reddit-style forum: the contracts on Ethereum hold
 all state, content lives on IPFS, and the website talks to both through
-MetaMask. **Nothing here is hosted in the cloud for you** - running the app
+MetaMask.
+Running the app
 means running the website (and, for full functionality, its Graph indexer
 in Docker) on your own machine. It connects to the **public Sepolia
 testnet**, where the forum's contracts are already deployed and shared by
@@ -20,10 +21,6 @@ everyone - no local blockchain to run.
 - Nothing else - publishing posts/communities/images works out of the box
   using a shared Pinata pinning key already checked into `.env`. No account
   to create.
-  > **Security note:** the website pins content to IPFS directly from the
-  > browser, so this key ends up inside the JS the browser downloads and can
-  > be read by anyone using the site (e.g. via devtools). It's a key scoped
-  > only to pinning, on an account treated as semi-public by design.
 
 ## 2. Install
 

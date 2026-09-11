@@ -9,8 +9,7 @@ blockchain/cache/
 blockchain/types/
 blockchain/ignition/deployments/
 
-# env
-.env
+
 
 # Vite
 reddit-dapp-project/dist/

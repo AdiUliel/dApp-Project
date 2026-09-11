@@ -12,8 +12,6 @@ Three independent pieces share data only through the blockchain and IPFS — no 
 
 Data flow for "create a post": browser pins content to Pinata (JWT baked into the build as `VITE_PINATA_JWT`) → gets a CID → sends a tx referencing it to `DecentralizedForum` → the tx emits an event → the subgraph indexes it (if running) → the frontend reads the post back from the subgraph, or falls back to a direct chain read.
 
-> **Known trade-off:** IPFS writes were meant to route through a backend broker so the Pinata JWT never reached the browser; that service was dead code (nothing called it) and was removed. `VITE_PINATA_JWT` now ships in the JS bundle and is readable by anyone using the site — treat it as public.
-
 ## Repository layout
 
 ```
@@ -67,7 +65,3 @@ Tests: `blockchain/test/*.ts` (Mocha + Chai + ethers via `hre.network.connect()`
 
 See `USER_GUIDE.md` for exact commands. In short: `npm install` in `reddit-dapp-project/` (+ `subgraph/` for the Graph indexer) is enough to run against the already-deployed Sepolia contracts — `blockchain/` is only needed to deploy/redeploy. The website (`npm run dev`) and, for full functionality, the Graph stack (Docker) must be started by hand — nothing is deployed to a cloud host. CI (`.github/workflows/ci.yml`) only compiles/tests/typechecks each package; it never deploys or runs the Graph.
 
-## Where to look next
-
-- `ARCHITECTURE.md` — the IPFS/EVM non-atomicity design (stale in places: still describes the removed upload-service broker)
-- `DEPLOY_SEPOLIA.md` / `DEPLOY_IPFS.md` — deployment specifics

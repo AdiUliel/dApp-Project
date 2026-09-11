@@ -18,15 +18,14 @@
 - **Learning to work with the blockchain** — thinking in transactions, gas,
   on-chain vs. off-chain state, and wallet-signed calls was a different
   mental model than anything the degree covered.
-- **Picking up tools outside the curriculum** — Solidity/EVM, Hardhat,
-  ethers.js, IPFS pinning, The Graph's AssemblyScript mappings — each with
+- **Picking up tools outside the curriculum** — Solidity, Hardhat,
+  ethers.js, IPFS pinning, The Graph's AssemblyScript mappings and Docker — each with
   its own learning curve, on top of the actual feature work.
 
 ## Potential extensions
 
-- WalletConnect support, so the app isn't MetaMask-only and works from mobile
-  wallets.
+- WalletConnect support, so the app isn't MetaMask-only and works from variety wallets.
 - An on-chain reputation/karma score derived from voting history, shown on
   profiles.
-- Deploy to an L2 (e.g. Arbitrum) to cut gas costs on everyday actions like
-  voting and commenting.
+- Deploy to alternative blockchaim to cut gas costs on everyday actions like voting and commenting.
+- Deploy the App and the SubGraph to Cloud for simplify setup process for the end user. 
