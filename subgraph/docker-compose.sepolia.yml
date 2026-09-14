@@ -24,11 +24,14 @@ services:
       postgres_pass: let-me-in
       postgres_db: graph-node
       ipfs: 'ipfs:5001'
-      # Free public Sepolia RPC. Must allow historical eth_getLogs: publicnode's
-      # free tier does NOT (403 "archive requests"), dRPC does. Override with a
-      # personal Alchemy/Infura URL if rate-limited:
-      #   set SEPOLIA_RPC_URL=https://... before running redeploy-sepolia.bat
-      ethereum: 'sepolia:${SEPOLIA_RPC_URL:-https://sepolia.drpc.org}'
+      # Free public Sepolia RPC. It must allow historical eth_getLogs over wide
+      # block ranges. Tenderly's public gateway does; dRPC dropped Sepolia from
+      # its free plan ("chain is not available on free plan") and publicnode's
+      # free tier rejects archive requests. Override with a personal
+      # Alchemy/Infura URL if this one rate-limits you:
+      #   Windows:     set SEPOLIA_RPC_URL=https://...   then redeploy-sepolia.bat
+      #   macOS/Linux: export SEPOLIA_RPC_URL=https://... then ./redeploy-sepolia.sh
+      ethereum: 'sepolia:${SEPOLIA_RPC_URL:-https://sepolia.gateway.tenderly.co}'
       GRAPH_LOG: info
       # Required for the @fulltext search directives in schema.graphql.
       GRAPH_ALLOW_NON_DETERMINISTIC_FULLTEXT_SEARCH: 'true'

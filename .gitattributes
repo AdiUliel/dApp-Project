@@ -1,0 +1,4 @@
+# Batch files need CRLF: cmd can mis-resolve goto/call labels in LF-only files.
+*.bat text eol=crlf
+# Shell scripts need LF: a CRLF ending breaks them on macOS/Linux ("\r: command not found").
+*.sh text eol=lf

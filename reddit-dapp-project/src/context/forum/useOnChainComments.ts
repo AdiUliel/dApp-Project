@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ethers } from 'ethers'
-import { addFile } from '@/services/ipfs'
+import { addFile, COMMENT_IMAGE_FIELD_MAX_BYTES, joinImageCids } from '@/services/ipfs'
 import { fetchApprovedComments, fetchComments, fetchPendingComments, waitForGraphBlock } from '@/services/graph'
 import type { ForumCore } from './core'
 import type { OnChainComment, Post } from '@/types/forum'
@@ -16,7 +16,7 @@ export function useOnChainComments(core: ForumCore) {
   const [onChainComments, setOnChainComments] = useState<OnChainComment[]>([])
   const [pendingComments, setPendingComments] = useState<OnChainComment[]>([])
   const [newCommentByPost, setNewCommentByPost] = useState<Record<string, string>>({})
-  const [commentImageByPost, setCommentImageByPost] = useState<Record<string, File | undefined>>({})
+  const [commentImageByPost, setCommentImageByPost] = useState<Record<string, File[]>>({})
 
   // Three community-level queries total - approved comments arrive in ONE query
   // and are grouped by post here, instead of a separate query per post (N+1).
@@ -134,19 +134,32 @@ export function useOnChainComments(core: ForumCore) {
     }
   }
 
-  /** Uploads the pending comment image (if any) and returns its CID. */
+  /**
+   * Uploads the comment's attached images (if any) and returns the value for the
+   * contract's `imageCid` field: '' for none, the CIDs comma-joined otherwise,
+   * or null when the upload failed and the comment must not be sent.
+   */
   const uploadCommentImage = async (postId: string): Promise<string | null> => {
-    const image = commentImageByPost[postId]
-    if (!image) return ''
+    const images = commentImageByPost[postId] || []
+    if (images.length === 0) return ''
 
     setTemporaryStatus(t('uploadingImages'))
+    let field: string
     try {
-      return await addFile(image)
+      field = joinImageCids(await Promise.all(images.map((file) => addFile(file))))
     } catch (error) {
       console.error('Comment image upload failed:', error)
       alert(t('imageUploadFailed'))
       return null
     }
+
+    // The contract rejects an imageCid over 200 bytes; failing here gives a
+    // clear message instead of a reverted (and paid-for) transaction.
+    if (new TextEncoder().encode(field).length > COMMENT_IMAGE_FIELD_MAX_BYTES) {
+      alert(t('commentImagesTooLong'))
+      return null
+    }
+    return field
   }
 
   /** Drops loaded comments when no community is selected. */
@@ -157,7 +170,7 @@ export function useOnChainComments(core: ForumCore) {
 
   const clearCommentDraft = (postId: string) => {
     setNewCommentByPost((previous) => ({ ...previous, [postId]: '' }))
-    setCommentImageByPost((previous) => ({ ...previous, [postId]: undefined }))
+    setCommentImageByPost((previous) => ({ ...previous, [postId]: [] }))
   }
 
   // Sends a flagged comment on-chain into the moderator review queue.

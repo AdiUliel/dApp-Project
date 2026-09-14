@@ -1,14 +1,6 @@
-import { ipfsUrl } from '@/services/ipfs'
+import { ImageGallery } from '@/components/media/ImageGallery'
 
 /** Attached post images, addressed by CID and served from an IPFS gateway. */
 export function PostImages({ postId, images }: { postId: string; images?: string[] }) {
-  if (!images || images.length === 0) return null
-
-  return (
-    <div className="post-images">
-      {images.map((cid) => (
-        <img className="post-image" key={`${postId}-${cid}`} src={ipfsUrl(cid)} alt="" loading="lazy" />
-      ))}
-    </div>
-  )
+  return <ImageGallery cids={images || []} idPrefix={`post-${postId}`} />
 }

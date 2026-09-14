@@ -2,6 +2,23 @@ const PINATA_JWT = import.meta.env.VITE_PINATA_JWT
 
 export const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 // 5 MB
 export const MAX_IMAGES_PER_POST = 4
+export const MAX_IMAGES_PER_COMMENT = 4
+
+// A comment's images live in the contract's single `imageCid` string, which
+// ForumModeration caps at 200 bytes. Several CIDs are stored comma-joined
+// (4 CIDv0 = 187 bytes), and a lone CID - every older comment - still parses.
+export const COMMENT_IMAGE_FIELD_MAX_BYTES = 200
+
+export function joinImageCids(cids: string[]): string {
+  return cids.filter(Boolean).join(',')
+}
+
+export function splitImageCids(field?: string | null): string[] {
+  return (field || '')
+    .split(',')
+    .map((cid) => cid.trim())
+    .filter(Boolean)
+}
 export const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
 // Returns an i18n key describing why the file is rejected, or null if it's fine.

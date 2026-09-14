@@ -1,5 +1,6 @@
 import { useForum } from '@/context/useForum'
-import { ipfsUrl } from '@/services/ipfs'
+import { splitImageCids } from '@/services/ipfs'
+import { ImageGallery } from '@/components/media/ImageGallery'
 import { renderRichText } from '@/components/Composer'
 import { PostImages } from '@/components/post/PostImages'
 
@@ -69,7 +70,7 @@ export function PendingReviewPanel() {
             <div className="review-item" key={`pending-comment-${comment.id}`}>
               <div className="review-item-body">
                 <p className="rich-text">{renderRichText(comment.content)}</p>
-                {comment.imageCid && <img className="post-image" src={ipfsUrl(comment.imageCid)} alt="" />}
+                <ImageGallery cids={splitImageCids(comment.imageCid)} idPrefix={`pending-comment-${comment.id}`} />
                 <small>
                   {formatUser(comment.author)} · {formatDate(comment.createdAt)} · Post #{comment.postId}
                 </small>

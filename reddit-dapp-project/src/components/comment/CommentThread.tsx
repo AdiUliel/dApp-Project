@@ -1,6 +1,7 @@
 import { useForum } from '@/context/useForum'
 import { Composer, renderRichText } from '@/components/Composer'
-import { ipfsUrl, validateImageFile } from '@/services/ipfs'
+import { MAX_IMAGES_PER_COMMENT, splitImageCids, validateImageFile } from '@/services/ipfs'
+import { ImageGallery } from '@/components/media/ImageGallery'
 import { isCommentSignatureValid } from '@/lib/format'
 import type { TranslationKey } from '@/lib/i18n'
 import type { Post } from '@/types/forum'
@@ -76,7 +77,7 @@ export function CommentThread({ post }: { post: Post }) {
                 </div>
               )}
               <p className="rich-text">{renderRichText(comment.content)}</p>
-              {comment.imageCid && <img className="post-image" src={ipfsUrl(comment.imageCid)} alt="" />}
+              <ImageGallery cids={splitImageCids(comment.imageCid)} idPrefix={`chain-${comment.id}`} />
               <small>
                 {formatUser(comment.author)} · {formatDate(comment.createdAt)} ·{' '}
                 {comment.confirming ? t('commentConfirmingLabel') : t('onChainComment')}
@@ -86,7 +87,7 @@ export function CommentThread({ post }: { post: Post }) {
           {postComments.map((comment, index) => (
             <div className="comment-item" key={`${comment.signature}-${index}`}>
               <p className="rich-text">{renderRichText(comment.content)}</p>
-              {comment.imageCid && <img className="post-image" src={ipfsUrl(comment.imageCid)} alt="" />}
+              <ImageGallery cids={splitImageCids(comment.imageCid)} idPrefix={`signed-${index}`} />
               <small>
                 {formatUser(comment.author)} · {formatDate(comment.createdAt)} · {t('signatureLabel')}{' '}
                 {isCommentSignatureValid(comment) ? t('signatureValid') : t('signatureInvalid')}
@@ -113,35 +114,52 @@ export function CommentThread({ post }: { post: Post }) {
             <input
               type="file"
               accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
               onChange={(event) => {
-                const file = event.target.files?.[0]
+                const files = Array.from(event.target.files || [])
                 event.target.value = ''
-                if (!file) return
-                const err = validateImageFile(file)
-                if (err) {
-                  alert(t(err as TranslationKey, { name: file.name }))
-                  return
+                const existing = commentImageByPost[post.id] || []
+                // Same first-pass filter as posts: drop bad types/sizes, cap the count.
+                const accepted: File[] = []
+                for (const file of files) {
+                  if (existing.length + accepted.length >= MAX_IMAGES_PER_COMMENT) {
+                    alert(t('uploadTooMany', { max: MAX_IMAGES_PER_COMMENT }))
+                    break
+                  }
+                  const err = validateImageFile(file)
+                  if (err) {
+                    alert(t(err as TranslationKey, { name: file.name }))
+                    continue
+                  }
+                  accepted.push(file)
                 }
-                setCommentImageByPost((previous) => ({ ...previous, [post.id]: file }))
+                if (accepted.length > 0) {
+                  setCommentImageByPost((previous) => ({
+                    ...previous,
+                    [post.id]: [...(previous[post.id] || []), ...accepted],
+                  }))
+                }
               }}
             />
           </label>
-          {commentImageByPost[post.id] && (
+          {(commentImageByPost[post.id] || []).length > 0 && (
             <div className="image-previews">
-              <div className="image-preview">
-                <img
-                  src={URL.createObjectURL(commentImageByPost[post.id] as File)}
-                  alt={commentImageByPost[post.id]?.name}
-                />
-                <button
-                  className="ghost-button"
-                  onClick={() =>
-                    setCommentImageByPost((previous) => ({ ...previous, [post.id]: undefined }))
-                  }
-                >
-                  {t('removeImage')}
-                </button>
-              </div>
+              {(commentImageByPost[post.id] || []).map((file, index) => (
+                <div className="image-preview" key={`${file.name}-${index}`}>
+                  <img src={URL.createObjectURL(file)} alt={file.name} />
+                  <button
+                    className="ghost-button"
+                    onClick={() =>
+                      setCommentImageByPost((previous) => ({
+                        ...previous,
+                        [post.id]: (previous[post.id] || []).filter((_, i) => i !== index),
+                      }))
+                    }
+                  >
+                    {t('removeImage')}
+                  </button>
+                </div>
+              ))}
             </div>
           )}
           <button className="secondary-button full" onClick={() => submitComment(post.id)}>
