@@ -115,6 +115,7 @@ export function usePosts(core: ForumCore, options: Options) {
     account: string,
     successMessage: string,
     failKey: TranslationKey,
+    onFailure?: () => void,
   ) => {
     try {
       const receipt = await tx.wait()
@@ -127,6 +128,7 @@ export function usePosts(core: ForumCore, options: Options) {
       setTemporaryStatus(indexed ? successMessage : `${successMessage} ${t('graphSyncPending')}`)
     } catch (error) {
       console.error('Transaction reconciliation failed:', error)
+      onFailure?.()
       await loadPosts(communityId).catch(() => {})
       failWith(failKey, error)
     }

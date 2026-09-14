@@ -13,8 +13,9 @@
 // no late binding. Moderation is split into a dependency-free roster (read)
 // and actions (write, needs loadPosts/loadCommunities) precisely to keep it
 // that way; merging them back would reintroduce a cycle.
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { checkContentSafety } from '@/lib/contentSafety'
+import { waitForGraphBlock } from '@/services/graph'
 import { formatDate as formatDateWithLang, isTempId } from '@/lib/format'
 import { useWallet } from '@/features/wallet/useWallet'
 import type { ReviewPrompt, View } from '@/types/forum'
@@ -47,6 +48,10 @@ export function useForumState() {
   // --- Cross-cutting UI state ----------------------------------------------
   const [view, setView] = useState<View>('home')
   const [selectedCommunityId, setSelectedCommunityId] = useState('')
+  // Read by background refreshes that outlive the render which started them,
+  // so they never reload a community the user has already navigated away from.
+  const selectedCommunityIdRef = useRef(selectedCommunityId)
+  selectedCommunityIdRef.current = selectedCommunityId
   const [selectedPostId, setSelectedPostId] = useState('')
   const [openKebabId, setOpenKebabId] = useState<string | null>(null)
   const [reviewPrompt, setReviewPrompt] = useState<ReviewPrompt | null>(null)
@@ -288,6 +293,29 @@ export function useForumState() {
 
   // Clean comments go straight on-chain (addComment) so every site instance
   // sees them; unsafe ones are routed into the moderator queue instead.
+  // reconcileAfterTx gives the graph ~8s, but the Sepolia graph normally trails
+  // the chain by 12-24s, so its reload often still lacks the new comment (the
+  // placeholder is kept meanwhile). Keep waiting in the background and reload
+  // once the graph has the block - unless it already had it within those 8s
+  // (reconcileAfterTx's reload covered it), or the user moved to another
+  // community (reloading would overwrite that community's view).
+  const refreshCommentsOnceIndexed = async (
+    tx: { wait: () => Promise<{ blockNumber: number } | null> },
+    communityId: string,
+  ) => {
+    try {
+      const receipt = await tx.wait()
+      if (!receipt) return
+      if (await waitForGraphBlock(receipt.blockNumber)) return
+      if (!(await waitForGraphBlock(receipt.blockNumber, 90_000))) return
+      if (selectedCommunityIdRef.current !== communityId) return
+      await posts.loadPosts(communityId)
+      setTemporaryStatus(t('commentPostedOnChain'))
+    } catch {
+      // A failed transaction is reported by reconcileAfterTx.
+    }
+  }
+
   const submitComment = async (postId: string) => {
     const content = (comments.newCommentByPost[postId] || '').trim()
 
@@ -331,11 +359,14 @@ export function useForumState() {
 
       // Show the comment the instant the tx is submitted - the content is what
       // the user just typed, so nothing needs to be fetched.
-      comments.addOptimisticComment(postId, account, content, imageCid)
+      const placeholderId = comments.addOptimisticComment(postId, account, content, imageCid)
       comments.clearCommentDraft(postId)
       setTemporaryStatus(t('commentConfirming'))
 
-      void posts.reconcileAfterTx(tx, communityId, account, t('commentPostedOnChain'), 'commentSubmitFailed')
+      void posts.reconcileAfterTx(tx, communityId, account, t('commentPostedOnChain'), 'commentSubmitFailed', () =>
+        comments.dropOptimisticComment(placeholderId),
+      )
+      void refreshCommentsOnceIndexed(tx, communityId)
     } catch (error) {
       console.error('On-chain comment failed:', error)
       failWith('commentSubmitFailed', error)

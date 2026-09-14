@@ -31,6 +31,47 @@ async function queryFilterChunked(
   return results
 }
 
+// How long a just-submitted comment may stay on screen without showing up in
+// loaded data. The Sepolia graph normally trails the chain by 12-24s, so this is
+// only a safety net against a placeholder lingering forever.
+const OPTIMISTIC_TTL_SECONDS = 180
+
+/**
+ * Reloads replace the comment list wholesale. A comment the user just posted
+ * can be missing from that data simply because the graph hasn't indexed its
+ * block yet, so carry over each still-confirming placeholder until a loaded
+ * comment matches it (same post, author, text and images, not older than the
+ * placeholder). Matching is one-to-one, so posting the same text twice keeps
+ * the second placeholder until its own copy arrives.
+ */
+function keepUnconfirmedOptimistic(loaded: OnChainComment[], previous: OnChainComment[]): OnChainComment[] {
+  const now = Math.floor(Date.now() / 1000)
+  const claimed = new Set<number>()
+  const carried: OnChainComment[] = []
+
+  for (const placeholder of previous) {
+    if (!placeholder.confirming) continue
+    if (now - placeholder.createdAt > OPTIMISTIC_TTL_SECONDS) continue
+
+    const match = loaded.findIndex(
+      (comment, index) =>
+        !claimed.has(index) &&
+        !comment.confirming &&
+        comment.postId === placeholder.postId &&
+        comment.author.toLowerCase() === placeholder.author.toLowerCase() &&
+        comment.content === placeholder.content &&
+        comment.imageCid === placeholder.imageCid &&
+        // Guards against an older identical comment ("thanks!") standing in.
+        comment.createdAt >= placeholder.createdAt - 120,
+    )
+    if (match === -1) carried.push(placeholder)
+    else claimed.add(match)
+  }
+
+  if (carried.length === 0) return loaded
+  return [...loaded, ...carried].sort((a, b) => a.createdAt - b.createdAt)
+}
+
 export function useOnChainComments(core: ForumCore) {
   const { t, getProvider, getContract, setTemporaryStatus, failWith } = core
 
@@ -84,7 +125,7 @@ export function useOnChainComments(core: ForumCore) {
         })
       })
       shown.sort((a, b) => a.createdAt - b.createdAt)
-      setOnChainComments(shown)
+      setOnChainComments((previous) => keepUnconfirmedOptimistic(shown, previous))
       return
     }
 
@@ -150,7 +191,7 @@ export function useOnChainComments(core: ForumCore) {
 
       shown.sort((a, b) => a.createdAt - b.createdAt)
       setPendingComments(pending)
-      setOnChainComments(shown)
+      setOnChainComments((previous) => keepUnconfirmedOptimistic(shown, previous))
     } catch (error) {
       console.error('Failed to load on-chain comments:', error)
     }
@@ -217,12 +258,16 @@ export function useOnChainComments(core: ForumCore) {
     }
   }
 
-  /** Optimistically shows a just-submitted comment while the tx confirms. */
-  const addOptimisticComment = (postId: string, account: string, content: string, imageCid: string) => {
+  /**
+   * Optimistically shows a just-submitted comment while the tx confirms.
+   * Returns the placeholder's id so a failed transaction can remove it.
+   */
+  const addOptimisticComment = (postId: string, account: string, content: string, imageCid: string): string => {
+    const id = `pending-${Date.now()}`
     setOnChainComments((previous) => [
       ...previous,
       {
-        id: `pending-${Date.now()}`,
+        id,
         postId,
         author: account,
         content,
@@ -232,6 +277,13 @@ export function useOnChainComments(core: ForumCore) {
         confirming: true,
       },
     ])
+    return id
+  }
+
+  // Placeholders now survive reloads until confirmed, so a failed transaction
+  // has to take its own placeholder down explicitly.
+  const dropOptimisticComment = (id: string) => {
+    setOnChainComments((previous) => previous.filter((comment) => comment.id !== id))
   }
 
   return {
@@ -246,6 +298,7 @@ export function useOnChainComments(core: ForumCore) {
     uploadCommentImage,
     clearCommentDraft,
     addOptimisticComment,
+    dropOptimisticComment,
     submitFlaggedComment,
   }
 }
