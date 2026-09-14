@@ -28,13 +28,16 @@ export function validateImageFile(file: File): string | null {
   return null
 }
 
-// Pinata's public gateway aggressively rate-limits unauthenticated reads
-// (429s), which showed up as posts falling back to "Post #N" / "..." titles.
-// Reads therefore try several public gateways; the first one that answers
-// becomes preferred so images load from a known-good host too.
+// No single public gateway serves everything reliably, so reads try several.
+// Measured on real forum content: Pinata's public gateway serves post JSON and
+// older files well but can hang for a long time on a freshly pinned image,
+// while Filebase served that same fresh image within seconds yet timed out on
+// post JSON. ipfs.io failed every probe (504s after minutes) and was dropped.
+// JSON reads remember the first gateway that answers; images fall back per
+// image instead (see ipfsGatewayUrls / IpfsImage).
 const GATEWAYS = [
   'https://gateway.pinata.cloud',
-  'https://ipfs.io',
+  'https://ipfs.filebase.io',
   'https://dweb.link',
   'https://w3s.link',
 ]
@@ -111,4 +114,10 @@ export async function addFile(file: File): Promise<string> {
 
 export function ipfsUrl(cid: string): string {
   return `${preferredGateway}/ipfs/${cid}`
+}
+
+/** Every gateway URL for a CID, the currently preferred gateway first. */
+export function ipfsGatewayUrls(cid: string): string[] {
+  const ordered = [preferredGateway, ...GATEWAYS.filter((gateway) => gateway !== preferredGateway)]
+  return ordered.map((gateway) => `${gateway}/ipfs/${cid}`)
 }

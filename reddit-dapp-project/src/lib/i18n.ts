@@ -89,6 +89,9 @@ const en = {
   previousImage: 'Previous image',
   nextImage: 'Next image',
   openOriginalImage: 'Open original',
+  imageLoading: 'Loading image…',
+  imageUnavailable: 'Image not available on IPFS yet',
+  imageRetry: 'Retry',
 
   governance: 'Governance',
   moderatorsTitle: 'Moderators',
@@ -509,6 +512,9 @@ const he: Record<keyof typeof en, string> = {
   previousImage: 'התמונה הקודמת',
   nextImage: 'התמונה הבאה',
   openOriginalImage: 'פתח במקור',
+  imageLoading: 'טוענת תמונה…',
+  imageUnavailable: 'התמונה עדיין לא זמינה ב-IPFS',
+  imageRetry: 'נסה שוב',
 
   governance: 'ממשל',
   moderatorsTitle: 'מודרטורים',

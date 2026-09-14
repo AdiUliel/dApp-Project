@@ -3,6 +3,7 @@ import type { MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useForum } from '@/context/useForum'
 import { ipfsUrl } from '@/services/ipfs'
+import { IpfsImage } from '@/components/media/IpfsImage'
 
 type ImageGalleryProps = {
   cids: string[]
@@ -44,7 +45,7 @@ export function ImageGallery({ cids, idPrefix }: ImageGalleryProps) {
               setOpenIndex(index)
             }}
           >
-            <img className="post-image" src={ipfsUrl(cid)} alt="" loading="lazy" />
+            <IpfsImage cid={cid} className="post-image" />
           </span>
         ))}
       </div>
@@ -67,7 +68,11 @@ function ImageLightbox({ cids, index, onIndexChange, onClose }: ImageLightboxPro
   const { t, lang } = useForum()
   const rtl = lang === 'he'
   const count = cids.length
-  const current = ipfsUrl(cids[index])
+  const currentCid = cids[index]
+  // The gateway that actually served this slide, so "open original" doesn't
+  // point at a gateway that is still hanging on a freshly pinned file.
+  const [resolved, setResolved] = useState<{ cid: string; url: string } | null>(null)
+  const current = resolved?.cid === currentCid ? resolved.url : ipfsUrl(currentCid)
 
   const step = (delta: number) => onIndexChange((index + delta + count) % count)
 
@@ -136,7 +141,16 @@ function ImageLightbox({ cids, index, onIndexChange, onClose }: ImageLightboxPro
       )}
 
       <figure className="lightbox-figure" onClick={swallow}>
-        <img className="lightbox-image" src={current} alt="" />
+        <IpfsImage
+          // Remount per slide: switching images shows a loading state instead
+          // of the previous image lingering while the next one loads (or fails).
+          key={`${index}-${currentCid}`}
+          cid={currentCid}
+          className="lightbox-image"
+          loading="eager"
+          timeoutMs={15000}
+          onResolved={(url) => setResolved({ cid: currentCid, url })}
+        />
         <figcaption className="lightbox-caption">
           {count > 1 && (
             <span>

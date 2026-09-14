@@ -196,3 +196,70 @@
     transform: scaleX(-1);
   }
 }
+
+/* IpfsImage: gateway-fallback image with visible loading / failed states.
+   While loading, the <img> is kept (so the browser fetches it) but hidden over
+   a placeholder that gives the slot a real size. */
+.ipfs-image {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  max-width: 100%;
+}
+
+.ipfs-image.loading img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+}
+
+.ipfs-image-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-width: 160px;
+  min-height: 120px;
+  padding: 0.75rem;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  border-radius: 0.9rem;
+  background: rgba(148, 163, 184, 0.08);
+  color: #94a3b8;
+  font-size: 0.8rem;
+  line-height: 1.3;
+  text-align: center;
+}
+
+.ipfs-image.loading .ipfs-image-placeholder {
+  animation: ipfs-image-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes ipfs-image-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.ipfs-image-retry {
+  padding: 0.25rem 0.7rem;
+  border: 1px solid rgba(251, 146, 60, 0.45);
+  border-radius: 999px;
+  color: #fdba74;
+  cursor: pointer;
+}
+
+.ipfs-image-retry:hover,
+.ipfs-image-retry:focus-visible {
+  background: rgba(251, 146, 60, 0.12);
+  outline: none;
+}
+
+/* Inside the full-screen viewer the placeholder takes the stage's size. */
+.lightbox-figure .ipfs-image-placeholder {
+  min-width: min(420px, 80vw);
+  min-height: min(320px, 60vh);
+  font-size: 0.95rem;
+}
