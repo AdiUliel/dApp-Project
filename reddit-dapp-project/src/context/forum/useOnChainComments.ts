@@ -10,6 +10,27 @@ import type { OnChainComment, Post } from '@/types/forum'
  * formerly-flagged ones render together; still-pending flagged ones feed the
  * moderator queue. Prefers the subgraph and falls back to chain reads/logs.
  */
+// Many public RPC endpoints (including the ones MetaMask defaults to on
+// Sepolia) cap eth_getLogs at a 10,000-block range and reject a wider query
+// outright rather than truncating it - so a single 50,000-block queryFilter
+// call fails completely, not partially. This chunks the scan into windows
+// small enough for those providers to accept, and merges the results.
+const LOG_SCAN_CHUNK = 9000
+
+async function queryFilterChunked(
+  contract: ethers.Contract,
+  filter: ReturnType<ethers.Contract['filters'][string]>,
+  fromBlock: number,
+  toBlock: number
+): Promise<(ethers.EventLog | ethers.Log)[]> {
+  const results: (ethers.EventLog | ethers.Log)[] = []
+  for (let start = fromBlock; start <= toBlock; start += LOG_SCAN_CHUNK) {
+    const end = Math.min(start + LOG_SCAN_CHUNK - 1, toBlock)
+    results.push(...(await contract.queryFilter(filter, start, end)))
+  }
+  return results
+}
+
 export function useOnChainComments(core: ForumCore) {
   const { t, getProvider, getContract, setTemporaryStatus, failWith } = core
 
@@ -75,13 +96,14 @@ export function useOnChainComments(core: ForumCore) {
       const pending: OnChainComment[] = []
       const postIds = new Set(communityPosts.map((post) => post.id))
 
-      // Bounded log scan keeps this cheap on public RPCs.
+      // Bounded (and chunked - see queryFilterChunked) log scan keeps this
+      // cheap and RPC-range-limit-safe on public providers.
       const latest = await provider.getBlockNumber()
       const fromBlock = Math.max(0, latest - 50000)
 
       const hiddenCommentIds = new Set<string>()
       try {
-        const hiddenEvents = await contract.queryFilter(contract.filters.CommentHidden(), fromBlock, latest)
+        const hiddenEvents = await queryFilterChunked(contract, contract.filters.CommentHidden(), fromBlock, latest)
         for (const event of hiddenEvents) {
           const args = (event as ethers.EventLog).args
           if (args) hiddenCommentIds.add(args[0].toString())
@@ -90,7 +112,7 @@ export function useOnChainComments(core: ForumCore) {
         // Older deployments have no CommentHidden event.
       }
 
-      const events = await contract.queryFilter(contract.filters.CommentCreated(), fromBlock, latest)
+      const events = await queryFilterChunked(contract, contract.filters.CommentCreated(), fromBlock, latest)
       for (const event of events) {
         const args = (event as ethers.EventLog).args
         if (!args) continue
